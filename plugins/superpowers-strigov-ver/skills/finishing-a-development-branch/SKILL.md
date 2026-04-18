@@ -88,17 +88,52 @@ Then: Cleanup worktree (Step 5)
 
 #### Option 2: Push and Create PR
 
-```bash
-# Push branch
-git push -u origin <feature-branch>
+**Decide how to generate the PR body first:**
 
-# Create PR
-gh pr create --title "<title>" --body "$(cat <<'EOF'
+```bash
+COMMIT_COUNT=$(git log --oneline <base-branch>..HEAD | wc -l | tr -d ' ')
+```
+
+**If `COMMIT_COUNT ≤ 5`** (small PR) — write the body yourself from the commit list using this template:
+
+```
 ## Summary
 <2-3 bullets of what changed>
 
 ## Test Plan
 - [ ] <verification steps>
+```
+
+**If `COMMIT_COUNT > 5`** (large PR) — delegate body-writing to an Opus subagent. Summarizing many commits into a coherent narrative is judgment work.
+
+```
+Agent(
+  subagent_type="general-purpose",
+  model="opus",
+  description="PR body: <branch name>",
+  prompt=<see below>
+)
+```
+
+Include in the prompt:
+- Branch name, base branch, commit count.
+- `git log --oneline <base>..HEAD` output (verbatim).
+- `git diff --stat <base>..HEAD` output (verbatim).
+- Original feature goal (one sentence).
+- Plan file path (if one exists).
+- Template to fill: `## Summary` (3-5 bullets grouped by theme, not per-commit) + `## Test Plan` (checklist of what a reviewer should verify, not just "run tests").
+
+Opus returns the filled body. Main thread does the push + `gh pr create`.
+
+**Then push and create the PR:**
+
+```bash
+# Push branch
+git push -u origin <feature-branch>
+
+# Create PR — paste the body produced above
+gh pr create --title "<title>" --body "$(cat <<'EOF'
+<body here>
 EOF
 )"
 ```

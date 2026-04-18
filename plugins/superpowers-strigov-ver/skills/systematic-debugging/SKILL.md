@@ -107,6 +107,26 @@ You MUST complete each phase before proceeding to the next.
 
    **This reveals:** Which layer fails (secrets → workflow ✓, workflow → build ✗)
 
+   **When evidence is complex or the failing layer is non-obvious** (5+ boundaries; multiple layers showing partial/ambiguous state; timing-sensitive) — delegate interpretation to an Opus subagent rather than guessing on main:
+
+   ```
+   Agent(
+     subagent_type="general-purpose",
+     model="opus",
+     description="Evidence analysis: <bug summary>",
+     prompt=<see below>
+   )
+   ```
+
+   Include in the prompt:
+   - All diagnostic output (verbatim, not summarized)
+   - What was expected at each boundary vs observed
+   - System topology (components and their data/config flow)
+
+   Ask: "Identify the failing boundary from this evidence. If ambiguous, name the 2 most likely candidates and the minimal additional diagnostic that would disambiguate them."
+
+   Use Opus's answer to decide whether to proceed to Phase 2 (if boundary is clear) or gather the suggested additional diagnostic (if ambiguous).
+
 5. **Trace Data Flow**
 
    **WHEN error is deep in call stack:**
@@ -145,6 +165,26 @@ You MUST complete each phase before proceeding to the next.
 ### Phase 3: Hypothesis and Testing
 
 **Scientific method:**
+
+**For non-obvious root causes** — when Phase 2 surfaced multiple differences with no clear culprit, or when the domain is unfamiliar — delegate hypothesis generation to an Opus subagent before committing to a single theory:
+
+```
+Agent(
+  subagent_type="general-purpose",
+  model="opus",
+  description="Root cause hypotheses: <bug summary>",
+  prompt=<see below>
+)
+```
+
+Include in the prompt:
+- Symptoms (verbatim)
+- Phase 1 evidence (diagnostic output, recent changes, data-flow trace)
+- Phase 2 pattern analysis: working reference, broken implementation, every identified difference
+
+Ask Opus: "Propose 2-3 candidate root causes, ranked by likelihood. For each, specify the minimal test that would confirm or rule it out, and what symptom the test would produce in each case."
+
+Main thread picks which hypothesis to test first (typically highest likelihood with cheapest test). Continue with the steps below.
 
 1. **Form Single Hypothesis**
    - State clearly: "I think X is the root cause because Y"
@@ -208,9 +248,29 @@ You MUST complete each phase before proceeding to the next.
    - Are we "sticking with it through sheer inertia"?
    - Should we refactor architecture vs. continue fixing symptoms?
 
-   **Discuss with your human partner before attempting more fixes**
+   **REQUIRED: Dispatch Opus subagent for architectural analysis before discussing with your human partner.** This is judgment work — don't skip it.
 
-   This is NOT a failed hypothesis - this is a wrong architecture.
+   ```
+   Agent(
+     subagent_type="general-purpose",
+     model="opus",
+     description="Architecture question: <bug summary>",
+     prompt=<see below>
+   )
+   ```
+
+   The subagent has NO session context. Include in the prompt:
+   - Original bug symptom (verbatim)
+   - All 3+ fix attempts tried, and what new symptom each caused
+   - Relevant source files (paste key sections or name paths with line ranges)
+   - Any Phase 1 evidence that seemed inconclusive
+
+   Ask Opus to:
+   1. Identify whether a common architectural pattern is the root cause (shared mutable state, tight coupling, wrong abstraction level, inverted dependency, etc.).
+   2. Propose 2-3 architectural alternatives, each with trade-offs and rough refactor scope.
+   3. Recommend the smallest change that would resolve the pattern at its root.
+
+   When Opus returns, present its findings to your human partner as the starting point for the architectural decision — don't paraphrase away the concrete alternatives. This is NOT a failed hypothesis — this is a wrong architecture.
 
 ## Red Flags - STOP and Follow Process
 

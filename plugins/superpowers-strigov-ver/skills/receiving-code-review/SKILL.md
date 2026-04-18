@@ -110,6 +110,46 @@ FOR multi-item feedback:
   4. Verify no regressions
 ```
 
+## Opus Triage for Complex External Review Threads
+
+**When to delegate triage to Opus:** external reviewer left a long thread (≥5 items) OR a mix of items where some seem technically questionable/context-dependent. Categorizing each item as valid / YAGNI / wrong-for-this-codebase / needs-clarification is judgment work — don't do it in main thread under fatigue.
+
+**When to skip Opus:** feedback from your human partner (trusted, implement after understanding), or short threads (<5 items, obviously actionable).
+
+**Dispatch:**
+
+```
+Agent(
+  subagent_type="general-purpose",
+  model="opus",
+  description="Review triage: <PR/thread id>",
+  prompt=<see below>
+)
+```
+
+Include in the prompt:
+- The full review thread (verbatim, with reviewer attribution if multiple people).
+- PR title + scope summary.
+- Base/head SHAs, and the diff (or paths the review touches).
+- Known constraints: project stack, compatibility targets, your human partner's prior architectural decisions that are load-bearing here.
+- Pointers to relevant code sections where context matters.
+
+Ask Opus to return a structured triage:
+
+```
+PER ITEM (numbered to match the review):
+- VERDICT: accept | push-back | needs-clarification | YAGNI
+- REASONING: 1-2 sentences with file:line reference when applicable
+- DRAFT RESPONSE (for push-back and needs-clarification items): the actual wording to send back
+
+IMPLEMENTATION ORDER (for accepted items only):
+1. Blocking (breaks, security)
+2. Simple (typos, imports)
+3. Complex (refactoring, logic)
+```
+
+Main thread uses Opus's triage as the starting point — you still own the final call (Opus doesn't see the whole codebase). If Opus's verdict conflicts with your read of the code, verify independently before sending the draft response.
+
 ## When To Push Back
 
 Push back when:
