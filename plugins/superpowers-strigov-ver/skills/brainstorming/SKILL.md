@@ -13,6 +13,18 @@ Start by understanding the current project context, then ask questions one at a 
 Do NOT invoke any implementation skill, write any code, scaffold any project, or take any implementation action until you have presented a design and the user has approved it. This applies to EVERY project regardless of perceived simplicity.
 </HARD-GATE>
 
+## Model split
+
+You are the ORCHESTRATOR on the main thread. You drive the interactive dialogue — exploring context, asking clarifying questions one at a time, presenting design sections, getting approval, and transitioning to writing-plans.
+
+**Opus is invoked as a subagent for judgment work:**
+- Proposing 2-3 approaches with trade-offs and a recommendation (checklist step 4).
+- Writing the final design doc and running the spec self-review (checklist steps 6-7).
+
+Dispatch via `Agent(subagent_type="general-purpose", model="opus", prompt=...)`. The subagent has NO session context — the prompt must be fully self-contained (include the user's original request, the collected Q&A, project context you gathered, any constraints).
+
+The main thread never writes the spec directly — dispatch Opus. Exception: the main thread runs `git add` / `git commit` after Opus returns (mechanical orchestrator work).
+
 ## Anti-Pattern: "This Is Too Simple To Need A Design"
 
 Every project goes through this process. A todo list, a single-function utility, a config change — all of them. "Simple" projects are where unexamined assumptions cause the most wasted work. The design can be short (a few sentences for truly simple projects), but you MUST present it and get approval.
@@ -24,10 +36,10 @@ You MUST create a task for each of these items and complete them in order:
 1. **Explore project context** — check files, docs, recent commits
 2. **Offer visual companion** (if topic will involve visual questions) — this is its own message, not combined with a clarifying question. See the Visual Companion section below.
 3. **Ask clarifying questions** — one at a time, understand purpose/constraints/success criteria
-4. **Propose 2-3 approaches** — with trade-offs and your recommendation
+4. **Propose 2-3 approaches** — dispatch Opus subagent; present its options with trade-offs and recommendation
 5. **Present design** — in sections scaled to their complexity, get user approval after each section
-6. **Write design doc** — save to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit
-7. **Spec self-review** — quick inline check for placeholders, contradictions, ambiguity, scope (see below)
+6. **Write design doc** — dispatch Opus subagent to write `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`, then commit from main thread
+7. **Spec self-review** — Opus runs this inline while writing the spec (placeholders, contradictions, ambiguity, scope — see below)
 8. **User reviews written spec** — ask user to review the spec file before proceeding
 9. **Transition to implementation** — invoke writing-plans skill to create implementation plan
 
@@ -77,11 +89,16 @@ digraph brainstorming {
 - Only one question per message - if a topic needs more exploration, break it into multiple questions
 - Focus on understanding: purpose, constraints, success criteria
 
-**Exploring approaches:**
+**Exploring approaches (delegate to Opus):**
 
-- Propose 2-3 different approaches with trade-offs
-- Present options conversationally with your recommendation and reasoning
-- Lead with your recommended option and explain why
+Dispatch Opus subagent with a self-contained prompt that includes:
+- The user's original request (verbatim)
+- Project context you collected (relevant files, docs, recent commits)
+- Full Q&A from clarifying questions
+- Any constraints or preferences the user stated
+- Ask: "Propose 2-3 different approaches with trade-offs. Lead with your recommended option and explain why."
+
+When Opus returns, present the options to the user conversationally — don't dump the subagent's output verbatim. Lead with Opus's recommendation and reasoning. You may paraphrase for fit with the ongoing dialogue, but do not invent options Opus didn't propose.
 
 **Presenting the design:**
 
@@ -106,22 +123,25 @@ digraph brainstorming {
 
 ## After the Design
 
-**Documentation:**
+**Documentation (delegate to Opus):**
 
-- Write the validated design (spec) to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
-  - (User preferences for spec location override this default)
-- Use elements-of-style:writing-clearly-and-concisely skill if available
-- Commit the design document to git
+Dispatch Opus subagent with a self-contained prompt that includes:
+- The user's original request and any constraints
+- The full approved design (all sections from the dialogue, verbatim as the user approved)
+- Target path: `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` (user preferences for spec location override this default)
+- Instruction to use the elements-of-style:writing-clearly-and-concisely skill if available
+- Instruction to run the self-review pass (below) inline before returning, fixing issues in place
 
-**Spec Self-Review:**
-After writing the spec document, look at it with fresh eyes:
+Opus writes the file directly (general-purpose agent has Write/Edit tools). After Opus returns, commit the file from the main thread (`git add <path>` + `git commit` — orchestrator work, not a subagent task).
 
-1. **Placeholder scan:** Any "TBD", "TODO", incomplete sections, or vague requirements? Fix them.
+**Spec Self-Review (include in Opus prompt):**
+
+Instruct Opus: "After writing the spec, review it with fresh eyes and fix inline. No need to re-review — just fix and move on:
+
+1. **Placeholder scan:** Any 'TBD', 'TODO', incomplete sections, or vague requirements? Fix them.
 2. **Internal consistency:** Do any sections contradict each other? Does the architecture match the feature descriptions?
 3. **Scope check:** Is this focused enough for a single implementation plan, or does it need decomposition?
-4. **Ambiguity check:** Could any requirement be interpreted two different ways? If so, pick one and make it explicit.
-
-Fix any issues inline. No need to re-review — just fix and move on.
+4. **Ambiguity check:** Could any requirement be interpreted two different ways? If so, pick one and make it explicit."
 
 **User Review Gate:**
 After the spec review loop passes, ask the user to review the written spec before proceeding:
