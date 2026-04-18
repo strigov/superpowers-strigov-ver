@@ -23,7 +23,9 @@ You are the ORCHESTRATOR on the main thread. You drive the interactive dialogue 
 
 Dispatch via `Agent(subagent_type="general-purpose", model="opus", prompt=...)`. The subagent has NO session context — the prompt must be fully self-contained (include the user's original request, the collected Q&A, project context you gathered, any constraints).
 
-The main thread never writes the spec directly — dispatch Opus. Exception: the main thread runs `git add` / `git commit` after Opus returns (mechanical orchestrator work).
+The main thread never writes the spec directly — dispatch Opus. Exception: the main thread runs `git add` / `git commit` after Codex xhigh returns APPROVED (mechanical orchestrator work — see "Codex xhigh Spec Review" below).
+
+**Codex xhigh is invoked for spec review** (loop cap=4) after Opus finishes writing. Dispatched via `companion.mjs --background` per the `codex-invocation` skill — standard Agent paths auto-reject on this machine. See "Codex xhigh Spec Review" below for the loop procedure.
 
 ## Anti-Pattern: "This Is Too Simple To Need A Design"
 
@@ -38,10 +40,11 @@ You MUST create a task for each of these items and complete them in order:
 3. **Ask clarifying questions** — one at a time, understand purpose/constraints/success criteria
 4. **Propose 2-3 approaches** — dispatch Opus subagent; present its options with trade-offs and recommendation
 5. **Present design** — in sections scaled to their complexity, get user approval after each section
-6. **Write design doc** — dispatch Opus subagent to write `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`, then commit from main thread
+6. **Write design doc** — dispatch Opus subagent to write `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
 7. **Spec self-review** — Opus runs this inline while writing the spec (placeholders, contradictions, ambiguity, scope — see below)
-8. **User reviews written spec** — ask user to review the spec file before proceeding
-9. **Transition to implementation** — invoke writing-plans skill to create implementation plan
+8. **Codex xhigh reviews spec** — loop cap=4, using `./spec-reviewer-prompt.md`; if CHANGES_REQUESTED, dispatch Opus to revise then Codex re-reviews; after APPROVED, commit from main thread
+9. **User reviews written spec** — ask user to review the spec file before proceeding
+10. **Transition to implementation** — invoke writing-plans skill to create implementation plan
 
 ## Process Flow
 
@@ -54,8 +57,11 @@ digraph brainstorming {
     "Propose 2-3 approaches" [shape=box];
     "Present design sections" [shape=box];
     "User approves design?" [shape=diamond];
-    "Write design doc" [shape=box];
-    "Spec self-review\n(fix inline)" [shape=box];
+    "Write design doc\n(Opus subagent)" [shape=box];
+    "Spec self-review\n(Opus inline)" [shape=box];
+    "Codex xhigh reviews spec\n(loop cap=4)" [shape=box];
+    "Codex approved?" [shape=diamond];
+    "Commit spec" [shape=box];
     "User reviews spec?" [shape=diamond];
     "Invoke writing-plans skill" [shape=doublecircle];
 
@@ -67,10 +73,14 @@ digraph brainstorming {
     "Propose 2-3 approaches" -> "Present design sections";
     "Present design sections" -> "User approves design?";
     "User approves design?" -> "Present design sections" [label="no, revise"];
-    "User approves design?" -> "Write design doc" [label="yes"];
-    "Write design doc" -> "Spec self-review\n(fix inline)";
-    "Spec self-review\n(fix inline)" -> "User reviews spec?";
-    "User reviews spec?" -> "Write design doc" [label="changes requested"];
+    "User approves design?" -> "Write design doc\n(Opus subagent)" [label="yes"];
+    "Write design doc\n(Opus subagent)" -> "Spec self-review\n(Opus inline)";
+    "Spec self-review\n(Opus inline)" -> "Codex xhigh reviews spec\n(loop cap=4)";
+    "Codex xhigh reviews spec\n(loop cap=4)" -> "Codex approved?" ;
+    "Codex approved?" -> "Write design doc\n(Opus subagent)" [label="CHANGES_REQUESTED\n(Opus revises, re-review)"];
+    "Codex approved?" -> "Commit spec" [label="APPROVED"];
+    "Commit spec" -> "User reviews spec?";
+    "User reviews spec?" -> "Write design doc\n(Opus subagent)" [label="changes requested"];
     "User reviews spec?" -> "Invoke writing-plans skill" [label="approved"];
 }
 ```
@@ -132,7 +142,7 @@ Dispatch Opus subagent with a self-contained prompt that includes:
 - Instruction to use the elements-of-style:writing-clearly-and-concisely skill if available
 - Instruction to run the self-review pass (below) inline before returning, fixing issues in place
 
-Opus writes the file directly (general-purpose agent has Write/Edit tools). After Opus returns, commit the file from the main thread (`git add <path>` + `git commit` — orchestrator work, not a subagent task).
+Opus writes the file directly (general-purpose agent has Write/Edit tools). After Opus returns, do NOT commit yet — first run Codex xhigh spec review (see below).
 
 **Spec Self-Review (include in Opus prompt):**
 
@@ -143,8 +153,19 @@ Instruct Opus: "After writing the spec, review it with fresh eyes and fix inline
 3. **Scope check:** Is this focused enough for a single implementation plan, or does it need decomposition?
 4. **Ambiguity check:** Could any requirement be interpreted two different ways? If so, pick one and make it explicit."
 
+**Codex xhigh Spec Review (after Opus returns):**
+
+Dispatch Codex xhigh using `./spec-reviewer-prompt.md`. Read-only, no `--write`. Loop cap=4.
+
+Verdict handling:
+- `APPROVED` → commit the spec file from main thread (`git add <path>` + `git commit` with subject `docs(specs): add <topic>`, Co-Authored-By trailer). Then User Review Gate.
+- `CHANGES_REQUESTED` → dispatch Opus subagent again (revision mode) with the BLOCKING list, passing the spec file path. After Opus revises, re-run Codex with `--resume-last`. Increment counter.
+- Round 4 without APPROVED → escalate to user: spec path + last blocking list + one-sentence disagreement summary. User picks: accept / another round / close.
+
+Anti-pingpong and no-progress rules same as dev-orchestrator Step 2.
+
 **User Review Gate:**
-After the spec review loop passes, ask the user to review the written spec before proceeding:
+After Codex returns APPROVED and spec is committed, ask the user to review the written spec before proceeding:
 
 > "Spec written and committed to `<path>`. Please review it and let me know if you want to make any changes before we start writing out the implementation plan."
 

@@ -18,6 +18,37 @@ Assume they are a skilled developer, but know almost nothing about our toolset o
 **Save plans to:** `docs/plans/YYYY-MM-DD-<feature-name>.md`
 - (User preferences for plan location override this default)
 
+## Model split
+
+**Main thread (orchestration only):** announces, gathers context, constructs the Opus prompt from the guidance below, dispatches Opus, runs Codex review loop, commits, offers execution options. Never writes the plan directly.
+
+**Opus subagent** writes the plan. Dispatch via:
+
+```
+Agent(subagent_type="general-purpose", model="opus", description="Plan: <slug>", prompt=...)
+```
+
+The subagent has NO session context. Construct a fully self-contained prompt that includes:
+
+- User's original request verbatim.
+- Spec file path if available (e.g. when called after brainstorming) — otherwise paste the relevant requirements directly into the prompt.
+- Repo root (absolute path), language/framework, any constraints you know.
+- Target plan path: `docs/plans/YYYY-MM-DD-<slug>.md` (unless user specified a custom location).
+- **All the guidance in this skill below (Scope Check through Self-Review)** — these sections define HOW Opus must write the plan. Paste them into the prompt; don't just reference the file.
+- Instruction to run the Self-Review inline after writing, fixing issues in place (no separate round trip).
+
+This skill produces plans in the TDD Task/Step format described below. For the alternative YAML-phases format used by the `dev-orchestrator` skill, see `../dev-orchestrator/opus-plan-prompt.md` — do NOT mix the two.
+
+**Codex xhigh** reviews the plan after Opus writes it. Reuse the template at `../dev-orchestrator/plan-reviewer-prompt.md` for the invocation — the review categories (missing pieces, wrong approach, broken contracts, test gaps, risk, over-engineering) apply equally to this format. Dispatched via `companion.mjs --background` per `codex-invocation` skill. Loop cap=4.
+
+Verdict handling (identical to dev-orchestrator Step 2):
+
+- `APPROVED` → commit the plan file separately (`docs(plans): add <slug>`, stage only the plan file, Co-Authored-By trailer). Then proceed to Execution Handoff.
+- `CHANGES_REQUESTED` → dispatch Opus again with the BLOCKING list and the plan file path, instructing it to revise in place (not rewrite). After Opus returns, re-run Codex with `--resume-last`. Increment counter.
+- Round 4 without APPROVED → escalate to user: plan path + last blocking list + one-sentence disagreement summary. User picks: accept / another round / close.
+
+Anti-pingpong: if Codex repeats a blocking point that was explicitly rejected with reasoning in a prior round, mark `resolved-by-decision`, do not loop on it. No-progress: if two consecutive rounds produce an identical blocking list, escalate immediately.
+
 ## Scope Check
 
 If the spec covers multiple independent subsystems, it should have been broken into sub-project specs during brainstorming. If it wasn't, suggest breaking this into separate plans — one per subsystem. Each plan should produce working, testable software on its own.
@@ -121,7 +152,7 @@ Every step must contain the actual content an engineer needs. These are **plan f
 
 ## Self-Review
 
-After writing the complete plan, look at the spec with fresh eyes and check the plan against it. This is a checklist you run yourself — not a subagent dispatch.
+Opus runs this self-review inline while writing the plan — include these instructions in the Opus prompt. This is a checklist Opus runs itself — not a separate subagent dispatch.
 
 **1. Spec coverage:** Skim each section/requirement in the spec. Can you point to a task that implements it? List any gaps.
 
@@ -133,9 +164,9 @@ If you find issues, fix them inline. No need to re-review — just fix and move 
 
 ## Execution Handoff
 
-After saving the plan, offer execution choice:
+After Codex xhigh returns APPROVED and the plan is committed, offer execution choice:
 
-**"Plan complete and saved to `docs/plans/<filename>.md`. Two execution options:**
+**"Plan complete, reviewed by Codex xhigh, and saved to `docs/plans/<filename>.md`. Two execution options:**
 
 **1. Subagent-Driven (recommended)** - I dispatch a fresh subagent per task, review between tasks, fast iteration
 
