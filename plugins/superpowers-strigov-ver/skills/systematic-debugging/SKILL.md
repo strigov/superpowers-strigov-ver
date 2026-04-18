@@ -270,7 +270,40 @@ Main thread picks which hypothesis to test first (typically highest likelihood w
    2. Propose 2-3 architectural alternatives, each with trade-offs and rough refactor scope.
    3. Recommend the smallest change that would resolve the pattern at its root.
 
-   When Opus returns, present its findings to your human partner as the starting point for the architectural decision — don't paraphrase away the concrete alternatives. This is NOT a failed hypothesis — this is a wrong architecture.
+   **Then: single-shot Codex xhigh implementability check** — NOT a review loop, just one cross-opinion pass. Opus reasoned from patterns; Codex reads the code to verify each alternative is actually feasible.
+
+   Invocation per `codex-invocation` skill (read-only, `--effort xhigh`, no `--write`, no `--resume-last`, cap=1):
+
+   ```
+   IMPLEMENTABILITY CHECK — read-only, do not modify code.
+
+   An Opus subagent analyzed a debugging impasse (3+ failed fixes) and proposed these architectural alternatives:
+
+   <paste Opus's full analysis verbatim: root-cause pattern + 2-3 alternatives with recommended change>
+
+   ## Context
+   - Repository root: <absolute path>
+   - Relevant source files (read them before answering): <list of paths Opus referenced>
+   - Original bug symptom: <verbatim>
+
+   ## Your job
+
+   For EACH alternative, read the cited code and report:
+   (a) Implementation blockers — hidden contracts you see, callers that would break, data-migration risks, tooling/CI impact.
+   (b) Rough scope — files touched, tests to update/rewrite, external surfaces affected.
+   (c) Verdict: `viable` / `risky` / `blocked`, with one-sentence reasoning.
+
+   Output format: one section per alternative, verdicts on the last line of each section. No preamble.
+
+   Do not recommend which alternative to pick — that's the user's call. Do not invent new alternatives. Read the code and grade what Opus proposed.
+   ```
+
+   Present to your human partner as a starting point for the architectural decision:
+   - Opus's full analysis (don't paraphrase away concrete alternatives).
+   - Codex's implementability findings per alternative.
+   - Flag any `blocked` alternative explicitly — those are off the table unless Codex missed context.
+
+   This is NOT a failed hypothesis — this is a wrong architecture.
 
 ## Red Flags - STOP and Follow Process
 

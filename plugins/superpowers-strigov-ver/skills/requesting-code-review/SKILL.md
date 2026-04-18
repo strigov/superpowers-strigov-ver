@@ -51,11 +51,36 @@ Agent(
 
 The subagent has no session context — the filled template is all it sees.
 
-**3. Act on feedback:**
+**3. Act on Opus feedback:**
 - Fix Critical issues immediately
 - Fix Important issues before proceeding
 - Note Minor issues for later
 - Push back if reviewer is wrong (with reasoning)
+
+**4. Fused review: Codex xhigh control review**
+
+When Opus returns a clean verdict (no Critical/Important issues), dispatch a Codex xhigh control review for an orthogonal second opinion — the same fused-review pattern dev-orchestrator uses in Step 4.
+
+**Skip Codex control review only when:**
+- Trivial diff (single typo, <5 lines, no logic change).
+- Already running under `dev-orchestrator` (it runs Step 4.2 automatically — don't double up).
+
+**Dispatch:**
+
+Reuse the template at `../dev-orchestrator/codex-control-review-prompt.md`. Adapt the "Phase context" block for standalone use:
+- Replace "Plan file" with `{PLAN_OR_REQUIREMENTS}` content (paste it verbatim, not a path).
+- Drop "Current phase id".
+- Keep base SHA and "current diff" pointer.
+
+Invocation is read-only (`--effort xhigh`, no `--write`). Poll via Monitor per `codex-invocation` skill.
+
+**Combined verdict handling (same loop as dev-orchestrator Step 4, cap=4):**
+
+- Both clean → proceed to implementation order.
+- Either has BLOCKING → collect combined list (Opus + Codex BLOCKING), fix, then re-dispatch **both** reviewers in a fresh round. `--resume-last` for Codex on rounds 2+.
+- Round 4 without both-clean → escalate: combined list + one-sentence impasse summary. User picks accept / another round / close.
+
+Anti-pingpong: don't let either reviewer re-raise an item the other side explicitly rejected with reasoning. No-progress: if two consecutive rounds produce identical combined BLOCKING — escalate.
 
 ## Example
 
