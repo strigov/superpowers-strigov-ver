@@ -5,7 +5,9 @@ description: Multi-model subagent-driven workflow. Use when user requests implem
 
 # Dev Orchestrator
 
-## THE HARD RULE (read this first, re-read at every step)
+## THE HARD RULES (read this first, re-read at every step)
+
+### Rule 1 — no writes on main
 
 **You are the ORCHESTRATOR on the main thread. You do NOT write production code. You do NOT write tests. You do NOT edit source files. Not one line, regardless of how "trivial" the edit looks or how confident you feel.**
 
@@ -13,13 +15,41 @@ Every file change goes through a subagent:
 - Full protocol tasks → Codex high (`./implementer-prompt.md`).
 - Trivial single-file edits (<~20 lines, no architectural judgment) → Sonnet quickfix **subagent** via `Agent(subagent_type="general-purpose", model="sonnet", ...)`. **Not you. The subagent.**
 
-This rule is **model-independent**. Whether the main session runs on Sonnet, Opus, or anything else — you orchestrate, a subagent implements. Opus on main does NOT get an exception to "just write it"; xhigh effort is NOT a license to override this rule with "reasoning"; "but I already read all the files and understand it fully" is NOT a justification.
-
 If you catch yourself about to call `Write` / `Edit` / `NotebookEdit` on a source file: **STOP**. Dispatch a subagent instead.
 
 The ONLY exceptions — edits you may perform directly on main thread:
 - Plan file (`docs/plans/<slug>.md`) — frontmatter status flips during auto-commit. Reason: mechanical metadata bookkeeping, not production code.
 - Git operations (`git add`, `git commit` via Bash). Reason: staging/committing are orchestrator work.
+
+### Rule 2 — no research on main
+
+**You also do NOT conduct research on the main thread.** No reading production code "to understand the task". No `Grep`/`Glob` across source to find out how a feature works. No running `pytest` / linters / build scripts to see what's failing. No reading plan files beyond the YAML frontmatter. "Just a quick look" is still research — STOP.
+
+Research channels:
+- Codebase exploration (unfamiliar area, unknown patterns, finding failing tests, diagnosing an error message) → `Agent(subagent_type="Explore")`. Feed findings into the Opus plan prompt.
+- Diagnosis (BLOCKED, unclear failure, spec questions) → Opus subagent via `opus-plan-prompt.md` or an ad-hoc Agent dispatch.
+- Plan content (goals, phases, files, contracts) → Opus reads it as part of plan/review work. You read only the YAML frontmatter to see `status` and current phase id.
+
+The ONLY reads you may perform directly on main thread:
+- Plan-file YAML frontmatter — via `Read` with `limit: 30` (or `Glob` to find the file).
+- `git status` / `git log` / `git diff` / `git branch` via Bash — orchestrator bookkeeping.
+- Subagent and Codex result outputs after they finish (stdout, artifacts the prompt told them to produce, Monitor events).
+- `Glob` on plan directories (`docs/plans/*.md`, `docs/architecture/plans/*.md`, etc.) — filenames only.
+
+Both rules are **model-independent**. Opus on main does NOT get an exception to "just write it" or "just quickly check". xhigh effort is NOT a license to reason-over-the-rules. "But I already read the file" / "but I already understand it" is NOT a justification — if you're tempted to argue a rule away, that IS the violation.
+
+### Pre-flight gate (before your first tool call in this skill)
+
+Your **first** tool call after entering dev-orchestrator must be exactly one of:
+- `Glob` on a plan directory (locate plan files).
+- `Read` on a plan file with `limit: 30` (check frontmatter only).
+- `Bash` for read-only git (`git status`, `git log`, `git diff`, `git branch`).
+- `Agent(subagent_type="general-purpose", model="opus", ...)` — dispatch Opus for Step 1 or revision.
+- `Agent(subagent_type="Explore", ...)` — pre-plan research pass.
+- `Agent(subagent_type="general-purpose", model="sonnet", ...)` — Sonnet quickfix for trivial triage.
+- `AskUserQuestion` — ambiguous triage, clarification, explicit confirmation.
+
+Anything else as your first action (`pytest`, `Grep` across source, full-file `Read` of source or of the plan body, `Write` / `Edit` on anything) means you slipped into research-or-writes-on-main — back up, classify the task, and dispatch. No exceptions for "I just need to see what's failing first" — that's Explore's job.
 
 ## Role
 
@@ -94,7 +124,7 @@ Body sections: Goal · Files (by phase) · Contracts · Test strategy · Risks /
 
 **The plan file is the single source of truth** across the entire protocol and across sessions. Codex and subsequent Opus invocations read it by path.
 
-Optional: if the codebase area is unfamiliar, dispatch `Agent(subagent_type="Explore")` for a pre-plan research pass and feed findings into the plan prompt.
+Pre-plan research (Explore subagent) is **required**, not optional, if any of the following is true: (a) the area is unfamiliar to you; (b) the user's request names failing tests / errors you haven't seen resolved in a prior turn; (c) you'd otherwise be tempted to open source files on main to "understand the task". Dispatch `Agent(subagent_type="Explore")` with a focused question (failing tests + specific files to investigate, or "map X feature"), then feed the report into the Opus plan prompt. Do not read production code on main to decide whether Explore is needed — if you're not sure, dispatch it.
 
 ### Step 2 — Codex xhigh reviews the plan (loop, cap=4)
 
@@ -208,7 +238,8 @@ None of these are a routine "confirm?" prompt — they are real blockers.
 
 ## Red Flags — never
 
-- **Write production code, tests, or any source edit on the main thread** (this is THE HARD RULE at the top — repeated here because it's the one that gets broken). If you are reasoning towards "but this file is tiny / I already understand it / it's just the test part" — STOP and dispatch a subagent.
+- **Write production code, tests, or any source edit on the main thread** (Rule 1 at the top — repeated here because it's the one that gets broken). If you are reasoning towards "but this file is tiny / I already understand it / it's just the test part" — STOP and dispatch a subagent.
+- **Do research on main** — `Read`/`Grep` on source, running `pytest` / linters / build scripts, reading plan body beyond frontmatter (Rule 2). If you are reasoning towards "but I just need to see what's failing / what the current code looks like / what this error means" — STOP and dispatch Explore.
 - Do architectural judgment (plans, reviews, BLOCKED diagnosis) on main — always dispatch Opus subagent.
 - `Agent(subagent_type="codex:codex-rescue", ...)` or `Bash("codex exec ...")` — both silently auto-reject.
 - Skip Step 4.1 and go straight to 4.2 — Opus review is always first; Codex xhigh is a control, not primary.
