@@ -209,6 +209,17 @@ Stage only the touched files. Conventional-commit as above.
 
 Report one line: `Committed: <sha> <subject>`.
 
+## Plan archival (top-level plan done)
+
+When auto-commit flips top-level plan `status: in-progress → done` (last phase landed), after the `Committed: <sha>` line ask the user exactly once:
+
+> План реализован. Переместить в `docs/plans/finished/`? [y/N]
+
+- `y` / `да` / `yes` → `git mv docs/plans/<file>.md docs/plans/finished/<file>.md` (create `finished/` if missing), commit as `chore: archive <slug>` in a **separate** commit (never `--amend`), report `Archived: <sha>`.
+- anything else → skip silently, do not ask again.
+
+Only when top-level status just flipped to `done`. Never between phases, never for quickfixes (no plan file).
+
 ## Multi-phase plans
 
 A single user request often produces a plan with multiple phases (Ф1, Ф2, Ф3, …). Treat them as ONE plan, not separate protocol runs:
