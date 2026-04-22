@@ -114,9 +114,14 @@ Also included: the `code-reviewer` agent from upstream.
 ## Installation
 
 ```
-/plugin marketplace add github:strigov/superpowers-strigov-ver
-/plugin install superpowers-strigov-ver
-/reload-plugins
+/plugin marketplace add strigov/strigov-cc-plugins
+/plugin install superpowers-strigov-ver@strigov-cc-plugins
+```
+
+Обновление в дальнейшем:
+
+```
+/plugin update superpowers-strigov-ver@strigov-cc-plugins
 ```
 
 ### Requirements
