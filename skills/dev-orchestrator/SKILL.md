@@ -47,7 +47,11 @@ Specifically: if the user activated `/dev` with no task and you answered "what s
 Allowed tool calls while the gate is armed:
 - `Glob` on a plan directory (locate plan files).
 - `Read` on a plan file with `limit: 30` (check frontmatter only).
-- `Bash` — **only** commands whose first token is one of: `git status`, `git log`, `git diff`, `git branch`, `git show`. Nothing else. Not `find`, not `ls`, not `cat`, not `grep` / `rg`, not `pytest`, not `python`, not `npm` / `pnpm` / `yarn`, not `make`, not `./anything`, not `tree`, not `wc`. "Read-only" is NOT a justification — the gate is about *source familiarity*, not filesystem safety, and every one of those commands exists to let you skim the project. If you need to list or inspect anything beyond git bookkeeping, that's an Explore job.
+- `Bash` — **only** commands whose first token is one of:
+  - (a) `git status`, `git log`, `git diff`, `git branch`, `git show` — orchestrator bookkeeping;
+  - (b) `find <plan-dir> ...` — resume-check / plan-file discovery during phase execution, where `<plan-dir>` is one of `docs/plans/`, `docs/architecture/plans/`, `docs/rfc/`, `.claude/plans/`, `/plans/`. No pipes, no chains — just the raw `find`.
+
+  Nothing else. Not `ls`, not `cat`, not `grep` / `rg`, not `pytest`, not `python`, not `npm` / `pnpm` / `yarn`, not `make`, not `./anything`, not `tree`, not `wc`. Not `find` on source paths (`find .`, `find src/`, etc.). "Read-only" is NOT a justification — the gate is about *source familiarity*, not filesystem safety, and every one of those commands exists to let you skim the project. If you need to list or inspect anything beyond git bookkeeping or plan-file discovery, that's an Explore job.
 - `Agent(subagent_type="general-purpose", model="opus", ...)` — dispatch Opus for Step 1 or revision. **This call disarms the gate.**
 - `Agent(subagent_type="Explore", ...)` — pre-plan research pass. **This call disarms the gate.**
 - `Agent(subagent_type="general-purpose", model="sonnet", ...)` — Sonnet quickfix for trivial triage. **This call disarms the gate.**
