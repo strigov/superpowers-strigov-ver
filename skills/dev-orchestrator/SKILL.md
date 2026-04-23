@@ -38,18 +38,34 @@ The ONLY reads you may perform directly on main thread:
 
 Both rules are **model-independent**. Opus on main does NOT get an exception to "just write it" or "just quickly check". xhigh effort is NOT a license to reason-over-the-rules. "But I already read the file" / "but I already understand it" is NOT a justification — if you're tempted to argue a rule away, that IS the violation.
 
-### Pre-flight gate (before your first tool call in this skill)
+### Pre-flight gate (applies until you've dispatched an Opus/Explore/quickfix subagent)
 
-Your **first** tool call after entering dev-orchestrator must be exactly one of:
+Every tool call in this skill — **not just the literal first one** — must be one of the list below, until you have dispatched an Opus plan/review subagent, an Explore subagent, or a Sonnet quickfix subagent for the current task. "Gate passed" is a state unlocked by *that dispatch*, not by the fact that one turn has already happened in the skill.
+
+Specifically: if the user activated `/dev` with no task and you answered "what should I implement?", the gate is still armed. When the task arrives in the next user message, treat it as your first real action in the skill — the gate fires again from scratch. Same thing if any number of clarifying turns happen before the actual task lands. A plain text reply is not a "first tool call" that spends the gate.
+
+Allowed tool calls while the gate is armed:
 - `Glob` on a plan directory (locate plan files).
 - `Read` on a plan file with `limit: 30` (check frontmatter only).
-- `Bash` for read-only git (`git status`, `git log`, `git diff`, `git branch`).
-- `Agent(subagent_type="general-purpose", model="opus", ...)` — dispatch Opus for Step 1 or revision.
-- `Agent(subagent_type="Explore", ...)` — pre-plan research pass.
-- `Agent(subagent_type="general-purpose", model="sonnet", ...)` — Sonnet quickfix for trivial triage.
-- `AskUserQuestion` — ambiguous triage, clarification, explicit confirmation.
+- `Bash` — **only** commands whose first token is one of: `git status`, `git log`, `git diff`, `git branch`, `git show`. Nothing else. Not `find`, not `ls`, not `cat`, not `grep` / `rg`, not `pytest`, not `python`, not `npm` / `pnpm` / `yarn`, not `make`, not `./anything`, not `tree`, not `wc`. "Read-only" is NOT a justification — the gate is about *source familiarity*, not filesystem safety, and every one of those commands exists to let you skim the project. If you need to list or inspect anything beyond git bookkeeping, that's an Explore job.
+- `Agent(subagent_type="general-purpose", model="opus", ...)` — dispatch Opus for Step 1 or revision. **This call disarms the gate.**
+- `Agent(subagent_type="Explore", ...)` — pre-plan research pass. **This call disarms the gate.**
+- `Agent(subagent_type="general-purpose", model="sonnet", ...)` — Sonnet quickfix for trivial triage. **This call disarms the gate.**
+- `AskUserQuestion` — ambiguous triage, clarification, explicit confirmation (see restrictions below).
 
-Anything else as your first action (`pytest`, `Grep` across source, full-file `Read` of source or of the plan body, `Write` / `Edit` on anything) means you slipped into research-or-writes-on-main — back up, classify the task, and dispatch. No exceptions for "I just need to see what's failing first" — that's Explore's job.
+Anything else while the gate is armed (`pytest`, `Grep` across source, full-file `Read` of source or of the plan body, `Write` / `Edit` on anything, `Bash` running project scripts) means you slipped into research-or-writes-on-main — back up, classify the task, and dispatch. No exceptions for "I just need to see what's failing first" / "the task looks dense so let me skim the code before writing the plan prompt" — that's exactly what Explore is for, and the density of the user's message is a reason to dispatch *harder*, not to research yourself.
+
+### Don't re-plan the user's plan
+
+If the user's message contains tables, candidate lists, effort estimates, numbered options, or "category A / B / C" breakdowns — that is **input for the Opus plan writer**, not a plan you get to narrow down yourself. While the gate is armed you MUST NOT:
+
+- Pick "which item to start with" from the user's list.
+- Ask "shall we start with X or Y?" / "с чего начнём — с изолированных скриптов или с intake?" as a triage question. This is NOT a valid `AskUserQuestion` use case — ranking and sequencing are Opus's job.
+- Re-rank, merge, or trim the user's proposals before handing them to Opus.
+- Produce a "let me summarize your analysis and confirm" response before dispatch.
+- Offer your own opinion on priorities ("Мой взгляд: начать с X") before Opus has written the plan.
+
+The density of the user's message is a signal to dispatch Opus **harder**, not to engage with it yourself. Pass the user's message verbatim into `opus-plan-prompt.md` — Opus is the one who writes the plan, including the ordering. The ONLY questions you may raise via `AskUserQuestion` before dispatch are *genuine* blockers: missing repo path, two mutually exclusive interpretations of intent, irreversible side-effects you need consent for. A ranking question is never a genuine blocker.
 
 ## Role
 
