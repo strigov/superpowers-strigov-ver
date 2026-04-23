@@ -2,6 +2,8 @@
 
 A Claude Code plugin that replaces the default "Claude does everything" mode with a **structured multi-model development workflow**: Sonnet orchestrates, Opus judges, Codex implements and reviews.
 
+Current repo/plugin version: `0.2.3`.
+
 ## The idea
 
 Claude Code's default behavior puts one model in charge of everything — planning, coding, reviewing, committing. This works for small tasks but breaks down on anything non-trivial: the model that writes code also reviews it, which is a conflict of interest; there's no plan to hold work accountable to; each session starts from scratch.

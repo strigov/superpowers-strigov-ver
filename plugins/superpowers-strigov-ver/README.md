@@ -1,6 +1,8 @@
 # superpowers-strigov-ver
 
 Personal Claude Code plugin assembled from:
+Current repo/plugin version: `0.2.3`.
+
 - **`dev-orchestrator`** — multi-model subagent-driven workflow (Opus plan + Codex xhigh plan-review loop + Codex high implement + Opus two-stage code review, auto-commit, loop cap=4 with anti-pingpong / no-progress guards).
 - **`codex-invocation`** — reference recipe for calling Codex via `companion.mjs --background` + Monitor polling on macOS (bypasses the silent auto-reject on standard Agent/`codex exec` paths).
 - 12 upstream skills copied from `superpowers` (Jesse Vincent / obra), namespace-stripped: `brainstorming`, `dispatching-parallel-agents`, `executing-plans`, `finishing-a-development-branch`, `receiving-code-review`, `requesting-code-review`, `systematic-debugging`, `test-driven-development`, `using-git-worktrees`, `verification-before-completion`, `writing-plans`, `writing-skills`. `brainstorming` and `writing-plans` extended to delegate spec/plan writing to Opus and spec/plan review to Codex xhigh (loop cap=4).
