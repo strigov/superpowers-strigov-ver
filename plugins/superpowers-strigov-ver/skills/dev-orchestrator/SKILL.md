@@ -62,7 +62,8 @@ Your only jobs, in order: triage → resume-check → dispatch → poll → coll
 - **Codex xhigh** — read-only roles, no `--write`:
   - Step 2: plan review.
   - Step 4.2: control review on the diff after Opus review returned clean.
-- **Codex high** — Step 3 implementation (always `--write`).
+- **Codex high** — Step 3 implementation for **non-frontend** phases (always `--write`).
+- **Claude frontend implementer subagent** — Step 3 for frontend-only phases. Opus for new UI / redesigns (prompt starts with `ultrathink`), Sonnet for simple tweaks. Subagent is instructed to use the `frontend-design` skill. See `./claude-frontend-implementer-prompt.md`.
 - **Sonnet quickfix subagent** — trivial path only.
 
 Codex is invoked via `companion.mjs --background` + Monitor poll — standard Agent/codex-rescue paths silently auto-reject on this machine. Read the `codex-invocation` skill before your first Codex call in a session.
@@ -70,14 +71,31 @@ Codex is invoked via `companion.mjs --background` + Monitor poll — standard Ag
 ## Triage (first decision)
 
 ```
-Single-file change, <~20 lines, no architectural judgment
-(rename, typo, obvious bugfix, mechanical update)?
+Pure frontend / UI task? (all changes in .tsx/.jsx/.vue/.svelte/.css/.scss,
+                          or user mentions "UI", "дизайн", "компонент", "страница",
+                          or screenshot attached with UI intent)
+  New UI (new page/component, visible redesign, visual rework)
+      → Claude frontend implementer subagent, model `opus`
+        (prompt starts with `ultrathink`).
+        Skip Codex for Step 3; Step 4 fused review still runs on the diff.
+  Simple UI edit (CSS tweak, copy change, minor markup)
+      → Claude frontend implementer subagent, model `sonnet`.
+        Skip Codex for Step 3; Step 4 fused review still runs on the diff.
+  Ambiguous (new vs tweak)
+      → AskUserQuestion once.
+
+Else — single-file change, <~20 lines, no architectural judgment
+          (rename, typo, obvious bugfix, mechanical update)?
   YES → Sonnet quickfix subagent (see ./sonnet-quickfix-prompt.md)
-  NO  → Full protocol below
-AMBIGUOUS → Ask user once: "trivial (Sonnet quickfix) or full protocol?"
+  NO  → Full protocol below. Step 3 routes per-phase: Codex high for backend /
+        non-frontend phases, Claude frontend implementer subagent for frontend-only
+        phases.
+AMBIGUOUS → Ask user once.
 ```
 
-Never guess on ambiguous cases — a wasted Codex round trip costs more than one clarifying question.
+Never guess on ambiguous cases — a wasted round trip costs more than one clarifying question.
+
+**Full-stack requests** (BE + FE in one task) go into the full protocol. The Opus plan writer is required to split backend and frontend into **separate phases** with an explicit contract between them (see `opus-plan-prompt.md`), so Step 3 can route each phase cleanly.
 
 ## Before Step 1 — check for an in-progress plan
 
@@ -138,17 +156,25 @@ Verdict handling:
 **Anti-pingpong**: if Codex repeats a blocking point that was explicitly rejected with reasoning in a prior round, mark `resolved-by-decision`, do not loop on it.
 **No-progress detector**: if two consecutive rounds produce an identical blocking list (by content), escalate immediately.
 
-### Step 3 — Codex high implements the current phase
+### Step 3 — implement the current phase
 
-Dispatch using `./implementer-prompt.md`. Points Codex at the plan file and names the current phase id. Wait terminal, fetch result.
+**Route by phase type** (decide from the plan's `Files` section for this phase):
 
-Implementer status:
+- **Frontend-only phase** (all files in .tsx/.jsx/.vue/.svelte/.css/.scss; visual/UI work) →
+  Dispatch Claude frontend implementer subagent using `./claude-frontend-implementer-prompt.md`.
+  Opus for new UI / redesign (prompt starts with `ultrathink`); Sonnet for simple tweaks.
+  Subagent is instructed to use the `frontend-design` skill.
+- **Backend / non-frontend phase** → Codex high using `./implementer-prompt.md`. Points Codex at the plan file and names the current phase id.
+
+Dispatch, wait terminal (Codex) or Agent completion (Claude subagent), fetch result.
+
+Implementer status (same shape from both paths):
 - `DONE` → Step 4.
 - `DONE_WITH_CONCERNS` → read concerns. Correctness/scope → address before review. Observations → note and proceed.
-- `NEEDS_CONTEXT` → provide the missing context, re-dispatch with `--resume-last`.
+- `NEEDS_CONTEXT` → provide the missing context and re-dispatch (Codex: `--resume-last`; Claude subagent: fresh Agent call carrying the added context).
 - `BLOCKED` — dispatch Opus subagent to assess (pass BLOCKED report + plan-file path). Opus returns one of:
-    1. More context needed → re-dispatch Codex high with added context, same effort.
-    2. Needs more reasoning → re-dispatch at `--effort xhigh`.
+    1. More context needed → re-dispatch implementer with added context, same effort.
+    2. Needs more reasoning → Codex path: re-dispatch at `--effort xhigh`. Claude path: upgrade from Sonnet to Opus (with `ultrathink`); if already Opus, hand back to user.
     3. Task too large → break into sub-phases; dispatch Opus to edit the plan accordingly, re-run Step 2 on the plan change.
     4. Plan is wrong → escalate to user.
 
@@ -266,7 +292,8 @@ None of these are a routine "confirm?" prompt — they are real blockers.
 
 - `./opus-plan-prompt.md` — Opus subagent, plan writing / revision
 - `./plan-reviewer-prompt.md` — Codex xhigh, plan review (Step 2)
-- `./implementer-prompt.md` — Codex high, implementation (Step 3)
+- `./implementer-prompt.md` — Codex high, implementation (Step 3, non-frontend phases)
+- `./claude-frontend-implementer-prompt.md` — Claude subagent (Opus / Sonnet), implementation (Step 3, frontend-only phases)
 - `./opus-review-prompt.md` — Opus subagent, code review (Step 4.1, fused spec + quality)
 - `./codex-control-review-prompt.md` — Codex xhigh, control review on diff (Step 4.2)
 - `./sonnet-quickfix-prompt.md` — Sonnet subagent, trivial path

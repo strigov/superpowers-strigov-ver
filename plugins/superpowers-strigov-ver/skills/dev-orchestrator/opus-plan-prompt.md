@@ -69,9 +69,10 @@ Body must have these H2 sections, in order:
 ## Phase decomposition rules
 
 - Each phase must be independently commit-able and produce a working system (no "Ф1 breaks build, Ф2 fixes it").
-- Each phase should be shippable in one Codex run (roughly a few files, a few hours of work).
+- Each phase should be shippable in one implementer run (roughly a few files, a few hours of work).
 - Prefer 2–5 phases. More than 5 is a signal to split into multiple plans.
 - Put risky / blocking decisions as early as possible so later phases can assume they're settled.
+- **Backend / frontend split (required for full-stack work)**: if a candidate phase would touch BOTH backend (.py, .rs, .go, .java, server-side .ts/.js, SQL, protobuf, etc.) AND frontend (.tsx, .jsx, .vue, .svelte, .css, .scss), split it into two phases — one BE, one FE — with an explicit contract between them (API endpoint shape, request/response schema, event names, data types). Reason: the orchestrator routes BE phases to Codex and FE phases to a Claude subagent; mixed phases cannot be dispatched cleanly.
 
 ## Discipline
 

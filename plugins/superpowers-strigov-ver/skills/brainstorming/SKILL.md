@@ -21,7 +21,7 @@ You are the ORCHESTRATOR on the main thread. You drive the interactive dialogue 
 - Proposing 2-3 approaches with trade-offs and a recommendation (checklist step 4).
 - Writing the final design doc and running the spec self-review (checklist steps 6-7).
 
-Dispatch via `Agent(subagent_type="general-purpose", model="opus", prompt=...)`. The subagent has NO session context — the prompt must be fully self-contained (include the user's original request, the collected Q&A, project context you gathered, any constraints).
+Dispatch via `Agent(subagent_type="general-purpose", model="opus", prompt=...)`. **The prompt MUST begin with the literal keyword `ultrathink` on its own first line (before anything else) to run Opus at max thinking effort.** The subagent has NO session context — the prompt must be fully self-contained (include the user's original request, the collected Q&A, project context you gathered, any constraints).
 
 The main thread never writes the spec directly — dispatch Opus. Exception: the main thread runs `git add` / `git commit` after Codex xhigh returns APPROVED (mechanical orchestrator work — see "Codex xhigh Spec Review" below).
 
@@ -101,7 +101,7 @@ digraph brainstorming {
 
 **Exploring approaches (delegate to Opus):**
 
-Dispatch Opus subagent with a self-contained prompt that includes:
+Dispatch Opus subagent with a self-contained prompt. **The prompt MUST begin with the literal word `ultrathink` on its own first line (before anything else) to run Opus at max thinking effort.** Then include:
 - The user's original request (verbatim)
 - Project context you collected (relevant files, docs, recent commits)
 - Full Q&A from clarifying questions
@@ -135,7 +135,7 @@ When Opus returns, present the options to the user conversationally — don't du
 
 **Documentation (delegate to Opus):**
 
-Dispatch Opus subagent with a self-contained prompt that includes:
+Dispatch Opus subagent with a self-contained prompt. **The prompt MUST begin with the literal word `ultrathink` on its own first line (before anything else) to run Opus at max thinking effort.** Then include:
 - The user's original request and any constraints
 - The full approved design (all sections from the dialogue, verbatim as the user approved)
 - Target path: `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` (user preferences for spec location override this default)
