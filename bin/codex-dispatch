@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Wrapper for the vendored Codex companion runtime.
+#
+# Resolves codex-companion.mjs regardless of install layout (marketplace cache
+# or local dev tree), and pins CLAUDE_PLUGIN_DATA so jobs/broker.sock state is
+# isolated from OpenAI's separately-installed codex plugin if it happens to be
+# present on the same machine.
+#
+# Also pins the model to $CODEX_DEFAULT_MODEL (default: gpt-5.5) for
+# subcommands that accept --model, unless the caller already passed --model.
+# This blocks the backend from auto-downgrading to spark on small/low-effort
+# tasks. Override with `CODEX_DEFAULT_MODEL=... codex-dispatch ...` or by
+# passing an explicit --model flag.
+#
+# Usage: codex-dispatch <task|status|result|cancel|review|...> [args...]
+set -eu
+
+resolve_companion() {
+  local marketplace_glob="$HOME/.claude/plugins/cache/strigov-cc-plugins/superpowers-strigov-ver/*/vendor/codex-companion/scripts/codex-companion.mjs"
+  local newest=""
+  for path in $(ls -1d $marketplace_glob 2>/dev/null | sort -rV); do
+    if [ -f "$path" ]; then newest="$path"; break; fi
+  done
+  if [ -n "$newest" ]; then echo "$newest"; return; fi
+
+  local self_dir
+  self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local dev_path="$self_dir/../vendor/codex-companion/scripts/codex-companion.mjs"
+  if [ -f "$dev_path" ]; then echo "$dev_path"; return; fi
+
+  echo ""
+}
+
+has_model_flag() {
+  for arg in "$@"; do
+    case "$arg" in
+      --model|--model=*|-m) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+COMPANION="$(resolve_companion)"
+if [ -z "$COMPANION" ]; then
+  echo "codex-dispatch: cannot find vendor/codex-companion/scripts/codex-companion.mjs" >&2
+  echo "  searched: ~/.claude/plugins/cache/strigov-cc-plugins/superpowers-strigov-ver/*/vendor/... and \$(dirname codex-dispatch)/../vendor/..." >&2
+  exit 1
+fi
+
+export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA_OVERRIDE:-$HOME/.claude/plugins/data/superpowers-strigov-ver-codex}"
+
+CODEX_DEFAULT_MODEL="${CODEX_DEFAULT_MODEL:-gpt-5.5}"
+
+if [ "$#" -gt 0 ]; then
+  subcommand="$1"
+  shift
+  case "$subcommand" in
+    task|review|adversarial-review|task-worker)
+      if has_model_flag "$@"; then
+        exec node "$COMPANION" "$subcommand" "$@"
+      else
+        exec node "$COMPANION" "$subcommand" --model "$CODEX_DEFAULT_MODEL" "$@"
+      fi
+      ;;
+    *)
+      exec node "$COMPANION" "$subcommand" "$@"
+      ;;
+  esac
+else
+  exec node "$COMPANION"
+fi

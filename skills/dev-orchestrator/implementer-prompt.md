@@ -5,16 +5,18 @@ Use when dispatching implementation to Codex high.
 ## Invocation
 
 ```bash
-node ~/.claude/plugins/cache/openai-codex/codex/1.0.3/scripts/codex-companion.mjs task \
+"$DISPATCH" task \
   --background \
   --write \
   --effort high \
   "<prompt below>"
 ```
 
+`$DISPATCH` is the `codex-dispatch` wrapper — resolve it once per session per the `codex-invocation` skill.
+
 For follow-up rounds after the fused review (Step 4), add `--resume-last` and pass the COMBINED BLOCKING list (from Opus review + Codex xhigh control review, merged by the orchestrator) — no full re-briefing.
 
-Poll with Monitor using the terminal-only filter from `codex-invocation`. Fetch via `companion.mjs result task-XXXX`.
+Poll with Monitor using the terminal-only filter from `codex-invocation`. Fetch via `"$DISPATCH" result task-XXXX`.
 
 ## First-round prompt template
 

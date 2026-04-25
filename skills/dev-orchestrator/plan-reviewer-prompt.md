@@ -5,17 +5,19 @@ Use when dispatching a plan review to Codex xhigh.
 ## Invocation
 
 ```bash
-node ~/.claude/plugins/cache/openai-codex/codex/1.0.3/scripts/codex-companion.mjs task \
+"$DISPATCH" task \
   --background \
   --effort xhigh \
   "<prompt below>"
 ```
 
+`$DISPATCH` is the `codex-dispatch` wrapper — resolve it once per session per the `codex-invocation` skill.
+
 No `--write`. Review is read-only.
 
 For round 2+, add `--resume-last` and tell Codex the plan file was updated and must be re-read. Do NOT send the full plan text in any round — always point to the file.
 
-Poll with Monitor using the terminal-only filter from the `codex-invocation` skill. Fetch result via `companion.mjs result task-XXXX`.
+Poll with Monitor using the terminal-only filter from the `codex-invocation` skill. Fetch result via `"$DISPATCH" result task-XXXX`.
 
 ## First-round prompt template
 

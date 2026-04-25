@@ -2,7 +2,7 @@
 
 A Claude Code plugin that replaces the default "Claude does everything" mode with a **structured multi-model development workflow**: Sonnet orchestrates, Opus judges, Codex implements and reviews.
 
-Current repo/plugin version: `0.2.3`.
+Current repo/plugin version: `0.3.0`.
 
 ## The idea
 
@@ -107,7 +107,7 @@ Beyond `dev-orchestrator` and `codex-invocation`, the plugin bundles 12 skills f
 | `writing-plans` | How to write a good implementation plan |
 | `writing-skills` | How to author Claude Code skills; Anthropic best practices |
 
-Also included: the `code-reviewer` agent from upstream.
+**Code review** is dispatched as an Opus subagent via `Agent(subagent_type="general-purpose", model="opus", ...)` — see `skills/requesting-code-review/`. The standalone `code-reviewer` agent type from upstream was removed; use the skill instead.
 
 **Not included from upstream**: `subagent-driven-development` (replaced by `dev-orchestrator`), `using-superpowers` (aggressive directive injection not wanted), the SessionStart hook.
 
@@ -129,25 +129,19 @@ Also included: the `code-reviewer` agent from upstream.
 ### Requirements
 
 1. **Claude Code** (any recent version)
-2. **OpenAI Codex plugin** — install via `/plugin marketplace add github:openai/codex-plugin-cc` then `/plugin install codex`
+2. **Codex CLI** — `npm install -g @openai/codex` (the standalone CLI, not the OpenAI codex Claude Code plugin — we vendor what we need from that plugin under `vendor/codex-companion/`, see below)
 3. **Codex login** — run once per machine: `!codex login` (the `!` prefix runs it in your shell)
 
-### Codex path assumption
+### Vendored Codex companion
 
-`codex-invocation` and all `dev-orchestrator` prompts hardcode the Codex companion path:
+The Codex companion runtime (originally part of OpenAI's `codex-plugin-cc`) is vendored into this plugin under `vendor/codex-companion/` (Apache-2.0, copyright OpenAI; see `vendor/codex-companion/LICENSE` and `NOTICE`). Vendored release: see `vendor/codex-companion/VERSION`.
 
-```
-~/.claude/plugins/cache/openai-codex/codex/1.0.3/scripts/codex-companion.mjs
-```
+All Codex calls go through the wrapper `bin/codex-dispatch`, which:
+- resolves `vendor/codex-companion/scripts/codex-companion.mjs` from either the marketplace install path (`~/.claude/plugins/cache/strigov-cc-plugins/superpowers-strigov-ver/<version>/...`) or the local dev tree;
+- pins `CLAUDE_PLUGIN_DATA` to `~/.claude/plugins/data/superpowers-strigov-ver-codex` so jobs and broker state stay isolated from any other codex install on the same machine;
+- for `task`/`review`/`adversarial-review`, auto-injects `--model gpt-5.5` (overridable via `CODEX_DEFAULT_MODEL` env or by passing an explicit `--model` flag) so the backend can't auto-downgrade to spark on small/low-effort calls.
 
-If your installed Codex version differs, update the path in:
-- `skills/codex-invocation/SKILL.md`
-- `skills/dev-orchestrator/implementer-prompt.md`
-- `skills/dev-orchestrator/plan-reviewer-prompt.md`
-- `skills/dev-orchestrator/opus-review-prompt.md`
-- `skills/dev-orchestrator/codex-control-review-prompt.md`
-
-Or symlink the expected path to your actual version.
+You no longer need OpenAI's `codex-plugin-cc` installed in Claude Code. To bump the vendored runtime, copy the contents of `plugins/codex/{scripts,prompts,schemas}` and the top-level `LICENSE`/`NOTICE` from a newer `openai/codex-plugin-cc` release tag into `vendor/codex-companion/` and update `VERSION`.
 
 ---
 

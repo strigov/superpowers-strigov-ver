@@ -5,17 +5,19 @@ Use AFTER Opus review (Step 4.1) returned `REVIEW_OK`. This is a second-opinion 
 ## Invocation
 
 ```bash
-node ~/.claude/plugins/cache/openai-codex/codex/1.0.3/scripts/codex-companion.mjs task \
+"$DISPATCH" task \
   --background \
   --effort xhigh \
   "<prompt below>"
 ```
 
+`$DISPATCH` is the `codex-dispatch` wrapper — resolve it once per session per the `codex-invocation` skill.
+
 No `--write`. This is read-only review.
 
 For round 2+ in the same Step 4 loop, add `--resume-last` and tell Codex the diff was updated (new fixes from Codex high). Do NOT re-send full prompt — `--resume-last` carries prior context.
 
-Poll with Monitor using the terminal-only filter from `codex-invocation`. Fetch via `companion.mjs result task-XXXX`.
+Poll with Monitor using the terminal-only filter from `codex-invocation`. Fetch via `"$DISPATCH" result task-XXXX`.
 
 ## First-round prompt template
 
