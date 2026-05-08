@@ -87,6 +87,10 @@ Verification run:
 
 If `REVIEW_OK`, include only the Verification run section below line 1.
 
+## Follow-up review delta
+
+For round 2+ in Step 4, first verify each ACCEPTED ledger item from the AUTHORIZED_CHANGE_LEDGER (`<repo-root>/docs/plans/<slug>.ledger.json`) is fixed correctly in the new diff. Inspect surrounding context only as needed; do NOT promote pre-existing unrelated issues to BLOCKING unless they clear the high-materiality bar — data loss/corruption, security/trust-boundary failure, guaranteed build/test/runtime failure, regression of an existing public contract, or direct failure of the phase acceptance criteria. Latent issues outside that bar belong in `NITS:` (informational only) rather than BLOCKING.
+
 ## Discipline
 
 - Read the diff yourself. Do not trust Codex's self-summary.

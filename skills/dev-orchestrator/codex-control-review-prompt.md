@@ -69,6 +69,8 @@ Do NOT write code. Do NOT modify files. Read plan + diff + any cited files only.
 ```
 The diff has been updated by Codex high based on your prior BLOCKING list. Re-read the current diff — `git diff <base-sha>` again. Same review rules, same output format.
 
+Focus on the delta between the previous diff and the current diff. The orchestrator's AUTHORIZED_CHANGE_LEDGER (`<repo-root>/docs/plans/<slug>.ledger.json`) lists what was authorized; do NOT block on pre-existing issues unrelated to the authorized fixes unless they clear the high-materiality bar — data loss/corruption, security/trust-boundary failure, guaranteed build/test/runtime failure, regression of an existing public contract, or direct failure of the phase acceptance criteria. Latent issues outside that bar belong in `NITS:` (informational), not BLOCKING.
+
 ## What the implementer did with your prior blocking list
 
 <for each prior BLOCKING item: "Fixed in <file:line>" / "Rejected — reason">

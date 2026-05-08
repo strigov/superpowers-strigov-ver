@@ -96,8 +96,10 @@ That's it. Do NOT commit — the orchestrator handles git.
 
 ## Mode B: Revise a plan (Step 2 CHANGES_REQUESTED)
 
+The orchestrator dispatches Mode B after Codex xhigh returned `CHANGES_REQUESTED` and the orchestrator has triaged the findings into the AUTHORIZED_CHANGE_LEDGER (see `dev-orchestrator/SKILL.md` "## Authorized Change Ledger"). The ledger is the single authoritative input for this dispatch — work only on its open ACCEPTED / PARTIALLY_ACCEPTED items.
+
 ```
-You are revising an implementation plan based on reviewer feedback. Do not rewrite from scratch — update the existing plan in place.
+You are revising an implementation plan based on reviewer feedback. Do not rewrite from scratch — apply only the changes the orchestrator has authorized via the ledger below.
 
 ## Plan file to revise
 
@@ -105,30 +107,48 @@ You are revising an implementation plan based on reviewer feedback. Do not rewri
 
 Read it in full (including frontmatter) before editing.
 
-## Reviewer's BLOCKING list
+## AUTHORIZED_CHANGE_LEDGER
 
-<paste BLOCKING items from Codex xhigh — one per line, numbered>
+`<absolute path to docs/plans/<slug>.ledger.json>`
 
-## Reviewer's NITS (informational only — do NOT act on these in this round)
+<paste open ledger items inline — orchestrator inlines ACCEPTED / PARTIALLY_ACCEPTED entries so you don't need to re-parse JSON>
 
-<paste NITS, if any>
+The ledger is the authoritative scope for this revision. Items not appearing as ACCEPTED / PARTIALLY_ACCEPTED here are NOT authorized — do not act on them, even if you remember them from a prior round.
 
-## What I already decided in prior rounds
+## Revision scope contract
 
-<if this is round 3+, paste prior "resolved-by-decision" items so you don't re-litigate>
+Apply only open ACCEPTED / PARTIALLY_ACCEPTED ledger items.
 
-## Your job
+For each edit, preserve a narrow causal chain:
 
-1. For each BLOCKING item: update the plan file in place (edit the relevant section). Each fix should be precise and minimal — don't restructure unrelated sections.
-2. If a BLOCKING item is wrong or was already addressed, write a short rebuttal — do NOT silently ignore. Return it in the output so the orchestrator can tell Codex.
-3. Preserve the existing frontmatter structure; update only what this revision actually changes.
-4. Do NOT commit — the orchestrator handles git.
+  accepted blocker → required plan change → exact sections touched.
+
+Do NOT:
+
+- act on NITs;
+- perform a general consistency pass;
+- add new requirements, guards, flags, diagnostics, APIs, tests, dependencies, or edge-case handling unless they are necessary to fix an accepted blocker;
+- rewrite unrelated sections for clarity;
+- restructure phases/tasks unless the accepted blocker explicitly requires it.
+
+If a ledger item appears wrong or already fixed:
+return `rejected — <reason>` or `already_fixed — <section>` for that ledger id.
+
+If fixing an accepted blocker requires broader scope than the ledger lists:
+do NOT apply the broader change silently. Stop the revision and return
+`NEEDS_AUTHORIZATION: <ledger id> requires <extra change> because <reason>`
+so the orchestrator can extend the ledger before you continue.
+
+Preserve the existing frontmatter structure; update only what this revision actually changes. Do NOT commit — the orchestrator handles git.
 
 ## Output
 
 Return to the orchestrator:
 
 1. Updated plan file path (same file).
-2. Per BLOCKING item: `fixed in <section>` OR `rejected — <reason>`.
-3. One-sentence summary of the revision shape (e.g., "restructured Ф2 contracts, added missing test for edge case X").
+2. Per ledger item, one line:
+   `<id>: fixed | rejected | already_fixed | needs_authorization — <one-line note + sections_changed list>`
+3. `no_nits_applied: true|false` (MUST be `true` unless the orchestrator explicitly authorized a NIT in the ledger).
+4. `deferred_observations: [<unrelated issue you noticed but did NOT edit>, ...]` — empty list if none.
+5. One-sentence summary of the revision shape (e.g., "fixed Ф2 contract gap; deferred two cosmetic observations").
 ```

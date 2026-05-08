@@ -107,13 +107,29 @@ Do not write code. Do not modify files. Read the plan and cited files only.
 ## Follow-up prompt (round 2+, with `--resume-last`)
 
 ```
-AUTHORIZED_CHANGE_LEDGER (path): `<repo-root>/docs/plans/<slug>.ledger.json` — read this before re-reviewing. The ledger lists which prior findings the orchestrator accepted and which were rejected.
+AUTHORIZED_CHANGE_LEDGER (path): `<repo-root>/docs/plans/<slug>.ledger.json` — read this before re-reviewing. The ledger lists which prior findings the orchestrator accepted (with the authorized change), partially accepted, rejected by scope, deferred, or marked NIT.
 
-The plan file at <repo-root>/docs/plans/<slug>.md has been revised. **Re-read it** — the edits happened since your last review. Same review rules, same output format.
+The plan file at <repo-root>/docs/plans/<slug>.md has been revised. **Re-read it** — the edits happened since your last review.
+
+## Follow-up review rule
+
+Re-read the whole plan for coherence, but your blocker authority is narrower than in round 1. First, verify each ACCEPTED / PARTIALLY_ACCEPTED ledger item:
+
+- fixed correctly;
+- no direct regression introduced by the fix;
+- no stale cross-reference directly caused by the fix.
+
+For any NEW issue not tied to an open ledger item:
+
+- classify it as `DEFER` unless it clears the high-materiality bar — guaranteed implementation/test failure, data-loss/security risk, regression of an existing public contract, or direct contradiction of a stated user requirement / failure of a phase acceptance criterion.
+- For every new `MUST_FIX_NOW`, the BLOCKING line MUST include `new_blocker_materiality: <which high-materiality category and why>`. Without that field the orchestrator treats the item as `DEFER` and will not act on it.
+- If all prior ledger blockers are fixed and you found only new non-critical issues, return `APPROVED` on line 1 and emit any `DEFER` / `NIT` items in their respective sections (below the empty BLOCKING block).
+
+**Authorized delta first.** Inspect the authorized delta — the open ledger items plus the plan-file sections the fixer reported as edited — before scanning the wider plan. You may inspect surrounding context to validate that delta, but only escalate older, unrelated issues to `MUST_FIX_NOW` if they clear the high-materiality bar above. Latent issues outside the delta default to `DEFER`.
 
 ## What I did with your prior blocking list
 
-[For each prior BLOCKING item: "Fixed in section <X>" / "Rejected — reason: ..."]
+[For each prior BLOCKING ledger item: "Fixed in section <X>" / "Rejected — reason: ..." / "Deferred — reason: ..."]
 
-Review again. Do not repeat blocking items I explicitly rejected with reasoning unless you have a new argument.
+Same output format as round 1 (`APPROVED` or `CHANGES_REQUESTED` on line 1; `class:` on each BLOCKING item; sections for DEFER / NIT / REJECTED_BY_SCOPE). Do not repeat blocking items the orchestrator marked `rejected` with reasoning unless you have a genuinely new argument.
 ```
