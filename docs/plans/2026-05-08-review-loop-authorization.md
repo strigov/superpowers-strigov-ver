@@ -11,7 +11,7 @@ phases:
     status: done
   - id: Ф3
     scope: "Fix E (new-blocker churn detector in SKILL.md Step 2/Step 4) + §5.3 implementer fix-round scope"
-    status: pending
+    status: done
   - id: Ф4
     scope: "Fix F (two-stage plan review) + §5.4 opus-review 4a authorization compliance + §5.5 codex-control authorization boundary"
     status: pending
@@ -177,11 +177,11 @@ Phase Ф2 is done when all acceptance criteria are checked; the four prompt file
 
 ### Acceptance criteria
 
-- [ ] `skills/dev-orchestrator/SKILL.md` Step 2 carries a "## New-blocker churn detector" subsection (or inline paragraph in Step 2's verdict-handling) with the §4 Fix E escalation rule
-- [ ] `skills/dev-orchestrator/SKILL.md` Step 4 carries the same churn-detector logic for the fused-review loop
-- [ ] `skills/writing-plans/SKILL.md` "Verdict handling" carries the same churn-detector logic (since it shares Step 2's loop semantics — see Ф1 T1.8 for the existing cross-link)
-- [ ] `skills/dev-orchestrator/implementer-prompt.md` "## Follow-up prompt (round 2+, with `--resume-last`)" carries the §5.3 "Fix-round scope" wording — implementer cannot fix NITs, opportunistic cleanup, or apply broad consistency passes without authorization
-- [ ] Implementer follow-up output requires `status: DONE | DONE_WITH_CONCERNS | NEEDS_AUTHORIZATION | BLOCKED` and `unauthorized_changes: []` (must be empty)
+- [x] `skills/dev-orchestrator/SKILL.md` Step 2 carries a "## New-blocker churn detector" subsection (or inline paragraph in Step 2's verdict-handling) with the §4 Fix E escalation rule
+- [x] `skills/dev-orchestrator/SKILL.md` Step 4 carries the same churn-detector logic for the fused-review loop
+- [x] `skills/writing-plans/SKILL.md` "Verdict handling" carries the same churn-detector logic (since it shares Step 2's loop semantics — see Ф1 T1.8 for the existing cross-link)
+- [x] `skills/dev-orchestrator/implementer-prompt.md` "## Follow-up prompt (round 2+, with `--resume-last`)" carries the §5.3 "Fix-round scope" wording — implementer cannot fix NITs, opportunistic cleanup, or apply broad consistency passes without authorization
+- [x] Implementer follow-up output requires `status: DONE | DONE_WITH_CONCERNS | NEEDS_AUTHORIZATION | BLOCKED` and `unauthorized_changes: []` (must be empty)
 
 ### Non-goals
 
@@ -197,12 +197,12 @@ Phase Ф2 is done when all acceptance criteria are checked; the four prompt file
 
 ### Tasks
 
-- [ ] **T3.1** Where `skills/dev-orchestrator/SKILL.md`:Step 2 verdict-handling. What: insert a new bullet between "No-progress detector" and the next H3 — "**New-blocker churn detector**: escalate immediately, even before cap=4, if (a) all blockers from the previous round are fixed or rejected-by-scope, AND (b) the reviewer returns only new MUST_FIX_NOW items, AND (c) none are DATA_LOSS, SECURITY, or GUARANTEED_FAIL materiality. Escalation summary: prior blockers closed + new blockers with materiality labels + recommendation: approve now + defer list OR authorize another high-materiality round." Patch source: `changes.md` §4 Fix E. Verification: `rg -n 'New-blocker churn detector' skills/dev-orchestrator/SKILL.md` returns at least 2 matches (Step 2 + Step 4)
-- [ ] **T3.2** Where `skills/dev-orchestrator/SKILL.md`:Step 4 fused-review loop guards. What: same churn-detector text as T3.1, applied to the Step 4 loop (each reviewer's blocking history tracked separately as the existing Step 4 anti-pingpong already does — clarify that the churn detector applies to the COMBINED list across opus-review and codex-control). Patch source: `changes.md` §4 Fix E + §3.8. Verification: covered by T3.1 verification + `rg -n -A2 'churn detector' skills/dev-orchestrator/SKILL.md | rg -i 'combined|fused'` returns at least one match
-- [ ] **T3.3** Where `skills/writing-plans/SKILL.md`:"Verdict handling" section. What: append the same churn-detector bullet (cross-link to dev-orchestrator/SKILL.md so the wording is canonical there). Patch source: `changes.md` §4 Fix E. Verification: `rg -n 'churn detector' skills/writing-plans/SKILL.md` returns at least one match
-- [ ] **T3.4** Where `skills/dev-orchestrator/implementer-prompt.md`:"## Follow-up prompt (round 2+, with `--resume-last`)" section (currently lines 96–113). What: replace the "## Rules" subsection with the §5.3 "Fix-round scope" wording (Allowed / Forbidden lists + NEEDS_AUTHORIZATION fallback). Add `AUTHORIZED_BLOCKERS:` placeholder where the orchestrator pastes ledger items. Patch source: `changes.md` §5.3 in full. Verification: `rg -n 'AUTHORIZED_BLOCKERS' skills/dev-orchestrator/implementer-prompt.md` returns at least one match; `rg -n 'NEEDS_AUTHORIZATION' skills/dev-orchestrator/implementer-prompt.md` returns at least one match
-- [ ] **T3.5** Where `skills/dev-orchestrator/implementer-prompt.md`:Required output for follow-up. What: extend the report format in the follow-up section to include `status: DONE | DONE_WITH_CONCERNS | NEEDS_AUTHORIZATION | BLOCKED`, `blockers_fixed: [ids]`, `files_changed_by_blocker:`, `unauthorized_changes: []` (must be empty), `nits_applied: false`. Patch source: `changes.md` §5.3 "## Required output". Verification: `rg -n 'unauthorized_changes' skills/dev-orchestrator/implementer-prompt.md` returns at least one match
-- [ ] **T3.6** Cross-cutting verification. Verification: `rg -n -o 'NEEDS_AUTHORIZATION' skills/dev-orchestrator/ skills/writing-plans/ | wc -l` returns at least 3 (opus-plan from Ф2, implementer from this phase, plus any internal references) — this confirms the term is consistent across files
+- [x] **T3.1** Where `skills/dev-orchestrator/SKILL.md`:Step 2 verdict-handling. What: insert a new bullet between "No-progress detector" and the next H3 — "**New-blocker churn detector**: escalate immediately, even before cap=4, if (a) all blockers from the previous round are fixed or rejected-by-scope, AND (b) the reviewer returns only new MUST_FIX_NOW items, AND (c) none are DATA_LOSS, SECURITY, or GUARANTEED_FAIL materiality. Escalation summary: prior blockers closed + new blockers with materiality labels + recommendation: approve now + defer list OR authorize another high-materiality round." Patch source: `changes.md` §4 Fix E. Verification: `rg -n 'New-blocker churn detector' skills/dev-orchestrator/SKILL.md` returns at least 2 matches (Step 2 + Step 4)
+- [x] **T3.2** Where `skills/dev-orchestrator/SKILL.md`:Step 4 fused-review loop guards. What: same churn-detector text as T3.1, applied to the Step 4 loop (each reviewer's blocking history tracked separately as the existing Step 4 anti-pingpong already does — clarify that the churn detector applies to the COMBINED list across opus-review and codex-control). Patch source: `changes.md` §4 Fix E + §3.8. Verification: covered by T3.1 verification + `rg -n -A2 'churn detector' skills/dev-orchestrator/SKILL.md | rg -i 'combined|fused'` returns at least one match
+- [x] **T3.3** Where `skills/writing-plans/SKILL.md`:"Verdict handling" section. What: append the same churn-detector bullet (cross-link to dev-orchestrator/SKILL.md so the wording is canonical there). Patch source: `changes.md` §4 Fix E. Verification: `rg -n 'churn detector' skills/writing-plans/SKILL.md` returns at least one match
+- [x] **T3.4** Where `skills/dev-orchestrator/implementer-prompt.md`:"## Follow-up prompt (round 2+, with `--resume-last`)" section (currently lines 96–113). What: replace the "## Rules" subsection with the §5.3 "Fix-round scope" wording (Allowed / Forbidden lists + NEEDS_AUTHORIZATION fallback). Add `AUTHORIZED_BLOCKERS:` placeholder where the orchestrator pastes ledger items. Patch source: `changes.md` §5.3 in full. Verification: `rg -n 'AUTHORIZED_BLOCKERS' skills/dev-orchestrator/implementer-prompt.md` returns at least one match; `rg -n 'NEEDS_AUTHORIZATION' skills/dev-orchestrator/implementer-prompt.md` returns at least one match
+- [x] **T3.5** Where `skills/dev-orchestrator/implementer-prompt.md`:Required output for follow-up. What: extend the report format in the follow-up section to include `status: DONE | DONE_WITH_CONCERNS | NEEDS_AUTHORIZATION | BLOCKED`, `blockers_fixed: [ids]`, `files_changed_by_blocker:`, `unauthorized_changes: []` (must be empty), `nits_applied: false`. Patch source: `changes.md` §5.3 "## Required output". Verification: `rg -n 'unauthorized_changes' skills/dev-orchestrator/implementer-prompt.md` returns at least one match
+- [x] **T3.6** Cross-cutting verification. Verification: `rg -n -o 'NEEDS_AUTHORIZATION' skills/dev-orchestrator/ skills/writing-plans/ | wc -l` returns at least 3 (opus-plan from Ф2, implementer from this phase, plus any internal references) — this confirms the term is consistent across files
 
 ### Risks
 

@@ -179,6 +179,7 @@ Verdict handling:
 
 **Anti-pingpong**: if Codex repeats a blocking point that was explicitly rejected with reasoning in a prior round, mark `resolved-by-decision`, do not loop on it.
 **No-progress detector**: if two consecutive rounds produce an identical blocking list (by content), escalate immediately.
+**New-blocker churn detector**: escalate immediately, even before cap=4, if (a) all blockers from the previous round are fixed or rejected-by-scope (per the ledger), AND (b) the reviewer returns only NEW `MUST_FIX_NOW` items, AND (c) none cite DATA_LOSS, SECURITY, or GUARANTEED_FAIL materiality. Escalation summary must include: prior blockers closed; new blockers with their materiality labels; recommendation — approve now plus defer list, OR authorize another high-materiality round. Findings classed `REGRESSION_FROM_AUTHORIZED_FIX` are NOT counted as "new MUST_FIX_NOW only" — they are causally tied to a prior accepted fix and don't trigger churn escalation.
 
 ### Step 3 — implement the current phase
 
@@ -229,6 +230,8 @@ Output: same format (`REVIEW_OK` / `REVIEW_BLOCKING`, numbered list, separate NI
 Round 4 without both-clean → escalate (have Opus write the summary): diff + combined list + one-sentence description of the impasse. User picks accept / another round / close.
 
 Same anti-pingpong / no-progress guards as Step 2 (apply to each reviewer's own history separately — don't let Opus re-raise what it already rejected, same for Codex xhigh).
+
+**New-blocker churn detector (Step 4)**: same rule as Step 2 — escalate immediately if (a) all blockers from the previous fused round are fixed or rejected-by-scope (per the ledger), AND (b) the COMBINED reviewer output (opus-review + codex-control) raises only NEW `MUST_FIX_NOW` items, AND (c) none cite DATA_LOSS, SECURITY, or GUARANTEED_FAIL materiality. Use the COMBINED / fused list for this check, not each reviewer's history independently — a finding raised by either reviewer counts. `REGRESSION_FROM_AUTHORIZED_FIX` items are excluded from the new-MUST_FIX_NOW count.
 
 ## Auto-commit (after fused review clean)
 

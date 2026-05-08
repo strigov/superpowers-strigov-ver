@@ -96,18 +96,52 @@ Do NOT silently produce work you're unsure about — use `DONE_WITH_CONCERNS`.
 ## Follow-up prompt (round 2+, with `--resume-last`)
 
 ```
-Previous implementation had blocking issues from the fused review (Opus + Codex xhigh control). Fix them, re-test, re-report.
+Previous implementation had blocking issues from the fused review (Opus + Codex xhigh control). Fix only the AUTHORIZED_BLOCKERS below, re-test, re-report.
 
-## Combined blocking list
+## AUTHORIZED_BLOCKERS
 
-1. <issue 1> — file:line — <reviewer: opus | codex-xhigh> — <what to change>
-2. <issue 2>
-...
+<paste open ACCEPTED / PARTIALLY_ACCEPTED ledger items inline; orchestrator pulls these from `<repo-root>/docs/plans/<slug>.ledger.json` — see dev-orchestrator/SKILL.md "## Authorized Change Ledger">
 
-## Rules
+Format per item:
 
-- Address every blocking item. If you disagree, explain in the report — do not silently ignore.
-- Do NOT expand scope beyond fixing these items.
-- Re-run tests after fixes; report results.
-- Same report format as before.
+1. `<ledger id>` — `<reviewer: opus-review | codex-control>` — `<file:line>` — `<authorized change>`
+2. ...
+
+Items not in this list are NOT authorized — do not act on them, even if you remember them from a prior round.
+
+## Fix-round scope
+
+You are in a review/fix loop. This is NOT a new implementation pass.
+
+You may only change code/tests/docs necessary to fix the AUTHORIZED_BLOCKERS above.
+
+Forbidden without explicit authorization:
+
+- fixing NITs;
+- opportunistic cleanup or refactors;
+- broad consistency passes;
+- adding new guards / flags / diagnostics / dependencies / tests not required by an authorized blocker;
+- touching files outside the phase plan unless the blocker cannot be fixed otherwise.
+
+If a blocker requires broader scope than the ledger lists, stop and return:
+`NEEDS_AUTHORIZATION: <ledger id> requires <extra change> because <reason>`
+so the orchestrator can extend the ledger before you continue.
+
+## Required output
+
+First line is the status token:
+
+`DONE` | `DONE_WITH_CONCERNS` | `NEEDS_AUTHORIZATION` | `BLOCKED`
+
+Then emit the structured fields:
+
+- `blockers_fixed: [<ledger ids>]`
+- `files_changed_by_blocker:`
+  - `<ledger id>: [<file paths>]`
+- `unauthorized_changes: []`   — MUST be empty; if not empty, each entry MUST explain why the change was unavoidable
+- `nits_applied: false`        — MUST be `false` unless the orchestrator explicitly authorized a NIT in the ledger
+- Concerns / questions / remaining ledger items not yet fixed (if status ≠ `DONE`)
+- Test / typecheck / linter results (commands + pass/fail summary)
+
+Re-run tests after fixes. Every change in the diff must trace back either to an entry in AUTHORIZED_BLOCKERS or to `unauthorized_changes` (with justification).
 ```
