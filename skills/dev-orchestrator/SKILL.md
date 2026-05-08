@@ -170,7 +170,11 @@ Dispatch using `./plan-reviewer-prompt.md` (points Codex at the plan file — no
 
 Verdict handling:
 - `APPROVED` → commit the plan file **separately** (subject: `docs(plans): add <slug>`, stage only the plan file, Co-Authored-By trailer, no push). Then Step 3.
-- `CHANGES_REQUESTED` → dispatch Opus subagent with `./opus-plan-prompt.md` (revision mode) and the BLOCKING list to update the plan file in place. Then Codex xhigh re-review with `--resume-last` telling it the file was updated. Increment counter.
+- `CHANGES_REQUESTED` → run the ledger sequence (see "## Authorized Change Ledger" for ledger shape and rules):
+  - **(a) Triage.** Classify each reviewer finding's `class:` into a ledger `decision`. `MUST_FIX_NOW` and `REGRESSION_FROM_AUTHORIZED_FIX` map to `ACCEPTED` (or `PARTIALLY_ACCEPTED` if you accept only part of the change); the reviewer's `DEFER` / `NIT` / `REJECTED_BY_SCOPE` items map directly to ledger `decision`s of the same name.
+  - **(b) Write/update ledger** at `docs/plans/<slug>.ledger.json` with this round's items — ids `R<round>-B<n>`, reviewer `codex-plan`. If the file already exists from a prior round, first update those entries' `status` (`fixed` / `rejected` / `deferred`) based on what the latest plan revision did, then append the new round's entries.
+  - **(c) Dispatch Opus revision.** Use `./opus-plan-prompt.md` (revision mode); pass the plan-file path, the ledger path (`docs/plans/<slug>.ledger.json`), and the open ACCEPTED / PARTIALLY_ACCEPTED items inline. Opus updates the plan file in place.
+  - **(d) Re-dispatch Codex xhigh** with `--resume-last` — tell it the plan file was updated and pass the ledger path so it can verify each ACCEPTED item is addressed. Increment counter.
 - Round 4 without APPROVED → escalate: plan-file path + last blocking list + one-sentence disagreement summary (have Opus write the summary). User picks: accept / another round / close.
 
 **Anti-pingpong**: if Codex repeats a blocking point that was explicitly rejected with reasoning in a prior round, mark `resolved-by-decision`, do not loop on it.
@@ -216,7 +220,11 @@ Output: same format (`REVIEW_OK` / `REVIEW_BLOCKING`, numbered list, separate NI
 
 **Combined BLOCKING list** (both 4.1 and 4.2):
 - Empty → auto-commit (see below). Phase done.
-- Non-empty → dispatch Codex high with `--resume-last --write --effort high` and the combined list. Increment iteration counter. Next iteration re-runs 4.1 from scratch (fresh Opus subagent each round — no bias from previous round).
+- Non-empty → run the ledger sequence (see "## Authorized Change Ledger"):
+  - **(a) Triage** the combined list. Each finding's class maps to a ledger `decision`. Tag each ledger entry's `reviewer` field as `opus-review` (for 4.1 findings) or `codex-control` (for 4.2 findings). Step 4 uses the SAME ledger file as Step 2 (`docs/plans/<slug>.ledger.json`), but with ids `R<round>-B<n>` derived from the fused-review round counter — independent from Step 2's counter, and ledger entries from prior Step 2 rounds remain in place with their final `status`.
+  - **(b) Write/update the ledger** with the triaged items.
+  - **(c) Dispatch Codex high** with `--resume-last --write --effort high`, passing the ledger path (`docs/plans/<slug>.ledger.json`) and the open ACCEPTED / PARTIALLY_ACCEPTED items inline. Increment iteration counter.
+  - Next iteration re-runs 4.1 from scratch (fresh Opus subagent each round — no bias from previous round). The fresh Opus is given the ledger path so it can verify prior-round ACCEPTED items closed cleanly.
 
 Round 4 without both-clean → escalate (have Opus write the summary): diff + combined list + one-sentence description of the impasse. User picks accept / another round / close.
 
@@ -285,6 +293,34 @@ Pause and ask the user ONLY when:
 - The upcoming phase includes **irreversible side-effects** (prod schema migration, external API writes, destructive git ops) — flag before dispatching Codex.
 
 None of these are a routine "confirm?" prompt — they are real blockers.
+
+## Authorized Change Ledger
+
+`AUTHORIZED_CHANGE_LEDGER` is the explicit state object the orchestrator maintains across every CHANGES_REQUESTED verdict in Step 2 (plan review) and Step 4 (fused review). After every CHANGES_REQUESTED, the orchestrator MUST create or update the ledger before dispatching a fixer.
+
+**Where it lives.** `docs/plans/<slug>.ledger.json` — one file per active plan, shared between the Step 2 and Step 4 loops. The ledger is transient orchestrator state, NOT a source artifact: never staged, never committed. On top-level plan completion (frontmatter `status` flipping to `done`) or abandonment, the orchestrator deletes it via `rm` or `git clean`. Reviewers and fixers reference the ledger by absolute path; the orchestrator may also inline the open items into the dispatcher prompt when that is more compact than a path read.
+
+**Who writes it.** The Sonnet orchestrator main thread, via `Write` / `Edit` on the JSON file. This is mechanical state-keeping, not production code — the no-writes-on-main rule (HARD RULE 1) does NOT apply here, parallel to the existing plan-file frontmatter exemption.
+
+**Item shape** (one entry per triaged reviewer finding):
+
+```json
+{
+  "id": "R<round>-B<n>",
+  "reviewer": "codex-plan | opus-review | codex-control",
+  "decision": "ACCEPTED | PARTIALLY_ACCEPTED | REJECTED_BY_SCOPE | DEFER | NIT",
+  "authorized_change": "<exact allowed change, or null>",
+  "forbidden_expansions": ["<optional>", "..."],
+  "materiality": "BUILD_BREAK | ACCEPTANCE_CRITERIA | DATA_LOSS | SECURITY | REGRESSION | CONSISTENCY | NICE_TO_HAVE",
+  "status": "open | fixed | rejected | deferred"
+}
+```
+
+**Distribution rule.** Fixers receive only ACCEPTED / PARTIALLY_ACCEPTED open items. Reviewers receive the full ledger.
+
+**Materiality vocabulary (reviewer side).** Reviewers classify each finding using exactly one of: `MUST_FIX_NOW`, `REGRESSION_FROM_AUTHORIZED_FIX`, `DEFER`, `NIT`, `REJECTED_BY_SCOPE`. The orchestrator maps reviewer-class → ledger `decision` when triaging (e.g. `MUST_FIX_NOW` → ACCEPTED or PARTIALLY_ACCEPTED, `REJECTED_BY_SCOPE` → REJECTED_BY_SCOPE, etc.). Only `MUST_FIX_NOW` and `REGRESSION_FROM_AUTHORIZED_FIX` are valid in a reviewer's BLOCKING list; the other three land in DEFER / NIT / REJECTED_BY_SCOPE sections of the CHANGES_REQUESTED output.
+
+In Phase Ф1 the ledger is documented and produced, but its `materiality` field and the reviewer-side materiality classes are NOT yet enforced inside fix rounds, follow-up review prompts, or the implementer prompt — those constraints land in later phases of the review-loop-authorization plan.
 
 ## Reporting cadence
 

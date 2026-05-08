@@ -38,16 +38,37 @@ Read the entire file including YAML frontmatter. The `phases:` array defines the
 - Relevant files already in repo: [paths the plan touches or depends on]
 - Constraints the plan must respect: [e.g., existing API contracts, style, dependencies, performance budget]
 
-## Your job
+## AUTHORIZED_CHANGE_LEDGER
 
-Flag issues in these categories:
+<paste ledger or write 'N/A — first round'>
 
-- **Missing pieces**: requirements the plan does not address.
-- **Wrong approach**: steps that will not achieve the stated outcome, or will cause regressions.
-- **Broken contracts**: signatures, data shapes, APIs the plan changes in ways that break existing callers.
-- **Test gaps**: the plan's test strategy does not actually prove the change works.
-- **Risk**: hidden dependencies, race conditions, data-migration hazards, security implications.
-- **Over-engineering**: speculative abstractions, flags, or features not tied to the stated goal.
+## Authorization boundary
+
+Review the plan against:
+1. the user's original request;
+2. explicit repo constraints supplied by the orchestrator;
+3. the plan's own Acceptance criteria / Non-goals;
+4. for follow-up rounds, AUTHORIZED_CHANGE_LEDGER.
+
+Do not expand scope. Do not require optional features, extra commands, extra diagnostics, new flags, broader test frameworks, or additional edge-case support unless they are necessary to satisfy the current acceptance criteria or prevent a concrete high-materiality failure.
+
+## Finding classes
+
+Use exactly one class per finding:
+
+- `MUST_FIX_NOW` — blocks approval now. Requires one of:
+  - stated requirement missing/contradicted;
+  - guaranteed implementation/test failure;
+  - material data-loss/security/regression risk;
+  - public/API contract required by this plan is broken.
+
+- `REGRESSION_FROM_AUTHORIZED_FIX` — introduced by an accepted fix in this loop.
+
+- `DEFER` — useful hardening or design improvement outside current approval gate.
+
+- `NIT` — wording/style/minor clarity.
+
+- `REJECTED_BY_SCOPE` — outside stated scope or explicitly rejected.
 
 ## Output format (strict)
 
@@ -57,17 +78,28 @@ If `CHANGES_REQUESTED`, after line 1 emit:
 
 ```
 BLOCKING:
-1. <issue> — <what to change>
-2. ...
+1. class: MUST_FIX_NOW — <issue> — <what to change>
+2. class: REGRESSION_FROM_AUTHORIZED_FIX — <issue> — <what to change>
+...
 
-NITS:
-- <nit> — optional, non-blocking
+DEFER:
+- <issue> — <what to change, non-blocking>
+- ...
+
+NIT:
+- <issue> — <wording/style only>
+- ...
+
+REJECTED_BY_SCOPE:
+- <issue> — <reason: outside stated scope or explicitly rejected>
 - ...
 ```
 
-BLOCKING items MUST change. NITS are stylistic or minor. If nothing blocks but you have nits, return `APPROVED` and still put nits in the NITS section.
+Only `MUST_FIX_NOW` and `REGRESSION_FROM_AUTHORIZED_FIX` items are valid in BLOCKING. Findings classified as `DEFER`, `NIT`, or `REJECTED_BY_SCOPE` go into their own section below; do NOT promote them to BLOCKING. If nothing blocks but you have DEFER / NIT / REJECTED_BY_SCOPE items, return `APPROVED` on line 1 and still emit those sections (omit any section that is empty).
 
-Be ruthless on BLOCKING; be sparing — only include what truly blocks.
+Each BLOCKING item starts with `class: <MUST_FIX_NOW | REGRESSION_FROM_AUTHORIZED_FIX>` so the orchestrator can map your findings into the AUTHORIZED_CHANGE_LEDGER mechanically.
+
+Be ruthless on BLOCKING; be sparing — only include what truly blocks per the Finding classes definitions above.
 
 Do not write code. Do not modify files. Read the plan and cited files only.
 ```
@@ -75,6 +107,8 @@ Do not write code. Do not modify files. Read the plan and cited files only.
 ## Follow-up prompt (round 2+, with `--resume-last`)
 
 ```
+AUTHORIZED_CHANGE_LEDGER (path): `<repo-root>/docs/plans/<slug>.ledger.json` — read this before re-reviewing. The ledger lists which prior findings the orchestrator accepted and which were rejected.
+
 The plan file at <repo-root>/docs/plans/<slug>.md has been revised. **Re-read it** — the edits happened since your last review. Same review rules, same output format.
 
 ## What I did with your prior blocking list
