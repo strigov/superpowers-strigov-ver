@@ -1,14 +1,14 @@
 ---
 slug: upstream-sync-v5.1.0
 created: 2026-05-08
-status: in-progress
+status: done
 phases:
   - id: Ф1
     scope: "Rewrite using-git-worktrees skill with environment detection, submodule guard, native-tool preference, and explicit user consent"
     status: done
   - id: Ф2
     scope: "Rewrite finishing-a-development-branch with env detection, detached-HEAD menu, provenance-based cleanup, and merge-then-remove ordering"
-    status: in-progress
+    status: done
 ---
 
 ## Goal
