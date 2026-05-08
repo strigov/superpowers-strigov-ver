@@ -5,10 +5,10 @@ status: in-progress
 phases:
   - id: Ф1
     scope: "Rewrite using-git-worktrees skill with environment detection, submodule guard, native-tool preference, and explicit user consent"
-    status: in-progress
+    status: done
   - id: Ф2
     scope: "Rewrite finishing-a-development-branch with env detection, detached-HEAD menu, provenance-based cleanup, and merge-then-remove ordering"
-    status: pending
+    status: in-progress
 ---
 
 ## Goal
