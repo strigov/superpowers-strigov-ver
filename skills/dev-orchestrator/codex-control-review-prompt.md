@@ -36,6 +36,7 @@ Do not require new features, flags, diagnostics, guards, dependencies, or broad 
 - direct failure of the phase Acceptance criteria.
 
 If the issue is a useful hardening idea but does not clear this bar, put it in `next_steps` as `DEFER` and return `REVIEW_OK` — there are no material findings.
+Items the orchestrator marked `REJECTED_BY_SCOPE` in the AUTHORIZED_CHANGE_LEDGER are out of scope for this control review — do not re-flag them.
 </authorization_boundary>
 
 <finding_required_fields>

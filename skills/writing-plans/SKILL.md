@@ -95,6 +95,19 @@ This structure informs the task decomposition. Each task should produce self-con
 ---
 ```
 
+## Required body sections
+
+After the header, every plan MUST contain these H2 sections, in order:
+
+1. `## Goal` — one paragraph stating what the change enables and why now.
+2. `## Acceptance criteria` — 3–7 externally observable criteria that define "done" for the whole plan. Reviewers may block ONLY on these criteria, stated user requirements, repo constraints, or high-materiality risks (`DATA_LOSS`, `SECURITY`, `GUARANTEED_FAIL`, `REGRESSION`, `ACCEPTANCE_CRITERIA`).
+3. `## Non-goals / deferred` — explicit exclusions. Reviewers MUST classify requests for these as `REJECTED_BY_SCOPE` or `DEFER` unless the orchestrator authorizes scope expansion.
+4. `## File Structure` — every file the plan creates or modifies, with a one-line responsibility note (see "## File Structure" guidance above).
+5. `## Task list` — bite-sized tasks in TDD format (see "## Task Structure" below).
+6. `## Self-Review` — the inline self-review checklist Opus runs before reporting (see "## Self-Review" below).
+
+For the YAML-phases plan variant used by `dev-orchestrator` (different format, same gating rules and same `Acceptance criteria` / `Non-goals` requirements), see `../dev-orchestrator/opus-plan-prompt.md` Mode A.
+
 ## Task Structure
 
 ````markdown
@@ -163,6 +176,8 @@ Opus runs this self-review inline while writing the plan — include these instr
 **2. Placeholder scan:** Search your plan for red flags — any of the patterns from the "No Placeholders" section above. Fix them.
 
 **3. Type consistency:** Do the types, method signatures, and property names you used in later tasks match what you defined in earlier tasks? A function called `clearLayers()` in Task 3 but `clearFullLayers()` in Task 7 is a bug.
+
+**4. Acceptance-criteria coverage:** does every phase produce something observable in the `## Acceptance criteria` list? Are `## Non-goals / deferred` entries explicit enough that a reviewer would classify a scope-expansion request as `REJECTED_BY_SCOPE`?
 
 If you find issues, fix them inline. No need to re-review — just fix and move on. If you find a spec requirement with no task, add the task.
 

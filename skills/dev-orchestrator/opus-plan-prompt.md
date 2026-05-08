@@ -60,11 +60,23 @@ phases:
 Body must have these H2 sections, in order:
 
 1. `## Goal` — what this enables, why now. Two short paragraphs max.
+1a. `## Acceptance criteria` — 3–7 externally observable criteria that define "done" for the whole plan. Reviewers may block only on these criteria, stated user requirements, repo constraints, or high-materiality risks (`DATA_LOSS`, `SECURITY`, `GUARANTEED_FAIL`, `REGRESSION`, `ACCEPTANCE_CRITERIA`).
+1b. `## Non-goals / deferred` — explicit exclusions. Reviewers MUST classify requests for these as `REJECTED_BY_SCOPE` or `DEFER` unless the orchestrator authorizes scope expansion.
 2. `## Files` — paths to create/modify, grouped by phase. Each file: one-line responsibility.
 3. `## Contracts` — function signatures, data shapes, API surface. Exact enough that Codex can implement without guessing.
 4. `## Test strategy` — what proves correctness, per phase. Test types (unit/integration/e2e), key cases, what NOT to test.
 5. `## Risks / unknowns / assumptions` — named explicitly. Anything you are guessing at.
 6. `## Phases` — per phase an H2 `## Ф1: <title>`, `## Ф2: <title>`, ... with the detailed steps inside each.
+
+For sections 1a and 1b, use this template body verbatim (replace bullets with the plan's actual content):
+
+## Acceptance criteria
+
+List 3–7 externally observable criteria that define "done" for the whole plan. Reviewers may block only on these criteria, stated user requirements, repo constraints, or high-materiality risks.
+
+## Non-goals / deferred
+
+List explicit exclusions. Reviewers MUST classify requests for these as `REJECTED_BY_SCOPE` or `DEFER` unless the orchestrator authorizes scope expansion.
 
 ## Phase decomposition rules
 
@@ -81,6 +93,7 @@ Body must have these H2 sections, in order:
 - **TDD-friendly**: tests should be writable before or alongside implementation, not as an afterthought.
 - **Single responsibility per file**: no god-files created.
 - **In existing codebases**: follow established patterns. Don't unilaterally restructure unrelated code.
+- **Acceptance-criteria gate**: the `## Acceptance criteria` section is the reviewer's sole authority for blocking on missing requirements; `## Non-goals / deferred` is the explicit defer-list. Together they bound the reviewer's mandate — any reviewer finding outside these sections must be classified `DEFER` or `REJECTED_BY_SCOPE`, never `MUST_FIX_NOW`, unless it clears the high-materiality bar.
 
 ## Output
 

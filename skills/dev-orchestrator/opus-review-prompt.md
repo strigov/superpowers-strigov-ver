@@ -54,7 +54,7 @@ Use this classification:
 - `NIT`:
   - style / wording only.
 
-For fix rounds (round 2+ in Step 4), compare the diff against the AUTHORIZED_CHANGE_LEDGER (`<repo-root>/docs/plans/<slug>.ledger.json`). Do NOT block on a pre-existing issue unrelated to an authorized fix unless it is a material regression, guaranteed failure, data-loss / security risk, or directly prevents this phase from meeting an Acceptance criterion.
+For fix rounds (round 2+ in Step 4), compare the diff against the AUTHORIZED_CHANGE_LEDGER (`<repo-root>/docs/plans/<slug>.ledger.json`). Findings the orchestrator already classified `REJECTED_BY_SCOPE` or `DEFER` in the ledger should not be re-raised — those have been triaged. Do NOT block on a pre-existing issue unrelated to an authorized fix unless it is a material regression, guaranteed failure, data-loss / security risk, or directly prevents this phase from meeting an Acceptance criterion.
 
 Issues must cite `file:line` where the deviation is.
 
