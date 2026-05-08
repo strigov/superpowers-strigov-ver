@@ -1,7 +1,7 @@
 ---
 slug: review-loop-authorization
 created: 2026-05-08
-status: in-progress
+status: done
 phases:
   - id: Ф1
     scope: "Fix A (AUTHORIZED_CHANGE_LEDGER) + Fix B (materiality classes) + concretizing prompt edits in §5.1/§5.2"
@@ -23,7 +23,7 @@ phases:
     status: done
   - id: Ф7
     scope: "Regression-fixture replay acceptance gate — manual replay of two reference logs against revised prompts"
-    status: pending
+    status: done
 ---
 
 # Review-Loop Authorization Boundary — Implementation Plan
@@ -338,11 +338,11 @@ Phase Ф6 is done when all acceptance criteria are checked; the schema extension
 
 ### Acceptance criteria
 
-- [ ] At least one of the two reference logs (16-round big case OR 11-round small case from §2 evidence map) is replayed through the revised prompts (manual replay, since there is no automated harness)
-- [ ] The replay produces a per-round table comparing OLD vs NEW classification: each old MUST_FIX_NOW gets re-classified as one of MUST_FIX_NOW / REGRESSION_FROM_AUTHORIZED_FIX / DEFER / NIT / REJECTED_BY_SCOPE
-- [ ] The replay measures `new_MUST_FIX_NOW_after_prior_closed` rate — target <20% on at least one log (per spec §6 Scenario 3)
-- [ ] If the target metric fails, the orchestrator escalates to user with "regression test failed; recommend stopping at Phase ФN" rather than silently completing the plan
-- [ ] All five §6 scenarios are touched at least lightly (Scenario 1: rejected-scope repeat; Scenario 2: NIT contamination; Scenario 3: edge-case cascade; Scenario 4: cross-reference drift; Scenario 5: implementation-review extra guard) — even if only one scenario produces a hard metric pass, the others are sanity-checked qualitatively
+- [x] At least one of the two reference logs (16-round big case OR 11-round small case from §2 evidence map) is replayed through the revised prompts (manual replay, since there is no automated harness) — done on small case, see `2026-05-08-review-loop-authorization-replay.md`
+- [x] The replay produces a per-round table comparing OLD vs NEW classification: each old MUST_FIX_NOW gets re-classified as one of MUST_FIX_NOW / REGRESSION_FROM_AUTHORIZED_FIX / DEFER / NIT / REJECTED_BY_SCOPE
+- [x] The replay measures `new_MUST_FIX_NOW_after_prior_closed` rate — target <20% on at least one log (per spec §6 Scenario 3) — measured at 83% on small case, which FAILS the strict numeric target; round-count reduced ≈36%, BLOCKING-volume reduced ≈39%
+- [x] If the target metric fails, the orchestrator escalates to user with "regression test failed; recommend stopping at Phase ФN" rather than silently completing the plan — escalated; see replay report Recommendation section
+- [x] All five §6 scenarios are touched at least lightly (Scenario 1: rejected-scope repeat; Scenario 2: NIT contamination; Scenario 3: edge-case cascade; Scenario 4: cross-reference drift; Scenario 5: implementation-review extra guard) — even if only one scenario produces a hard metric pass, the others are sanity-checked qualitatively
 
 ### Non-goals
 
@@ -356,12 +356,12 @@ Phase Ф6 is done when all acceptance criteria are checked; the schema extension
 
 ### Tasks
 
-- [ ] **T7.1** Identify the two reference logs by content. What: locate the 16-round big case (`docs/changes.md` §2 references "2026-05-05..." paths) and the 11-round small case (referenced as `planning-stage-log.md`) in the repo. Verification: `find /Users/strigov/Documents/Claude/projects-сode/superpowers-strigov-ver -name 'planning-stage-log.md' -o -name '2026-05-05*'` returns both files (or escalate to user if either is missing)
-- [ ] **T7.2** For each log: extract the per-round summary into a tabular form (round number, reviewer findings, orchestrator decisions). Manual transcription is acceptable. Patch source: `changes.md` §6 Regression-fixture method. Verification: at least one log table is constructed and recorded in the replay report
-- [ ] **T7.3** Replay big case (or small case, whichever is logistically easier) by feeding each round's reviewer findings into the revised plan-reviewer-prompt.md (in a fresh Codex/Opus dispatch with no `--resume-last` to avoid memory contamination). Capture re-classification per finding. Verification: the replay report contains a per-round before/after classification table with at least one full pass through the chosen log
-- [ ] **T7.4** Compute metrics. What: count `new_MUST_FIX_NOW_after_prior_closed` (the rate of new MUST_FIX_NOW findings in round N+1 when all round N MUST_FIX_NOW were closed). Patch source: `changes.md` §6 Scenario 3. Verification: a numeric rate is reported (e.g. "8/40 = 20%"); compare against the target <20%
-- [ ] **T7.5** Assess pass/fail. What: if the rate is <20% on at least one log, mark this phase as PASS; if not, escalate to user with the failed metric and a recommendation to either (a) refine specific prompt edits and re-run, or (b) accept the partial improvement and document residual risk. Verification: a pass/fail line in the replay report
-- [ ] **T7.6** Update plan frontmatter on success. What: orchestrator flips top-level `status: in-progress → done` and Phase Ф7 `status: pending → done`. Verification: `head -30 docs/plans/2026-05-08-review-loop-authorization.md | rg 'status: done'` returns at least one match (top-level)
+- [x] **T7.1** Identify the two reference logs by content. What: locate the 16-round big case (`docs/changes.md` §2 references "2026-05-05..." paths) and the 11-round small case (referenced as `planning-stage-log.md`) in the repo. Verification: `find /Users/strigov/Documents/Claude/projects-сode/superpowers-strigov-ver -name 'planning-stage-log.md' -o -name '2026-05-05*'` returns both files (or escalate to user if either is missing)
+- [x] **T7.2** For each log: extract the per-round summary into a tabular form (round number, reviewer findings, orchestrator decisions). Manual transcription is acceptable. Patch source: `changes.md` §6 Regression-fixture method. Verification: at least one log table is constructed and recorded in the replay report
+- [x] **T7.3** Replay big case (or small case, whichever is logistically easier) by feeding each round's reviewer findings into the revised plan-reviewer-prompt.md (in a fresh Codex/Opus dispatch with no `--resume-last` to avoid memory contamination). Capture re-classification per finding. Verification: the replay report contains a per-round before/after classification table with at least one full pass through the chosen log
+- [x] **T7.4** Compute metrics. What: count `new_MUST_FIX_NOW_after_prior_closed` (the rate of new MUST_FIX_NOW findings in round N+1 when all round N MUST_FIX_NOW were closed). Patch source: `changes.md` §6 Scenario 3. Verification: a numeric rate is reported (e.g. "8/40 = 20%"); compare against the target <20%
+- [x] **T7.5** Assess pass/fail. — escalated to user; user chose "PASS-with-caveats, top-level done" (small case missed strict <20% but ≈36% round-count and ≈39% BLOCKING-volume reductions; metric was mis-calibrated for small case where R2-R6 raised real GUARANTEED_FAIL/ACCEPTANCE_CRITERIA findings, not scope creep). What: if the rate is <20% on at least one log, mark this phase as PASS; if not, escalate to user with the failed metric and a recommendation to either (a) refine specific prompt edits and re-run, or (b) accept the partial improvement and document residual risk. Verification: a pass/fail line in the replay report
+- [x] **T7.6** Update plan frontmatter on success. What: orchestrator flips top-level `status: in-progress → done` and Phase Ф7 `status: pending → done`. Verification: `head -30 docs/plans/2026-05-08-review-loop-authorization.md | rg 'status: done'` returns at least one match (top-level)
 
 ### Risks
 
