@@ -32,16 +32,29 @@ Read the plan file first — YAML frontmatter + the `## <id>:` section at minimu
 
 Do 4a and 4b IN ORDER. If 4a finds issues, STOP — do NOT proceed to 4b. Return only 4a findings.
 
-### 4a. Spec compliance
+### 4a. Scope and authorization compliance
 
-Does the diff implement this phase as the plan specified — nothing more, nothing less?
+Determine whether the diff implements the current phase **and only the authorized review fixes**.
 
-Do NOT trust Codex's report if one is attached — read the actual code.
+Do NOT trust Codex's self-report if one is attached — read the actual code.
 
-- **Missing**: every bullet in the plan's contract / file / test strategy — present in the code?
-- **Extra / scope creep**: anything added that wasn't in the plan? Files outside the plan's target list? Flags / features not requested?
-- **Misinterpretation**: right problem, wrong way? Contracts (signatures, data shapes) exactly as planned?
-- **Wrong phase**: touches files belonging to a later phase?
+Use this classification:
+
+- `BLOCKING_SCOPE`:
+  - missing planned contract / test / file required for this phase;
+  - unauthorized file or public-contract change;
+  - implementation of a later phase;
+  - extra feature / flag / diagnostic that changes behavior or API surface;
+  - the review-fix round changed anything not tied to an authorized blocker.
+
+- `DEFER_SCOPE`:
+  - harmless extra helper / test wording that does not change behavior or public surface;
+  - useful cleanup outside the current phase (informational only — does NOT trigger another fix round).
+
+- `NIT`:
+  - style / wording only.
+
+For fix rounds (round 2+ in Step 4), compare the diff against the AUTHORIZED_CHANGE_LEDGER (`<repo-root>/docs/plans/<slug>.ledger.json`). Do NOT block on a pre-existing issue unrelated to an authorized fix unless it is a material regression, guaranteed failure, data-loss / security risk, or directly prevents this phase from meeting an Acceptance criterion.
 
 Issues must cite `file:line` where the deviation is.
 
@@ -94,7 +107,7 @@ For round 2+ in Step 4, first verify each ACCEPTED ledger item from the AUTHORIZ
 ## Discipline
 
 - Read the diff yourself. Do not trust Codex's self-summary.
-- If unsure about a boundary case, prefer BLOCKING over NIT — a false alarm costs one Codex round; a missed bug ships.
+- When unsure, classify by impact. Block only if the impact is material and current. The materiality classes and the high-materiality bar replace earlier heuristics that defaulted ambiguous findings to BLOCKING — do not fall back on them.
 - Do not rewrite the reviewer checklist into the report — stick to findings.
 - Do not fix code yourself. You are reviewing, not implementing.
 ```

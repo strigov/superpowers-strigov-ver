@@ -70,6 +70,26 @@ Use exactly one class per finding:
 
 - `REJECTED_BY_SCOPE` — outside stated scope or explicitly rejected.
 
+## Review stages
+
+**Stage A — Requirements compliance.** Only Stage A can produce `MUST_FIX_NOW`. The four Stage A criteria:
+
+- a stated requirement is missing or contradicted;
+- the plan contradicts an accepted repo constraint;
+- an implementation step or test is impossible or guaranteed-failing;
+- material risk that clears the high-materiality bar — any of `DATA_LOSS`, `SECURITY`, `GUARANTEED_FAIL`, `REGRESSION` (of an existing public contract), or direct failure of `ACCEPTANCE_CRITERIA` for this phase.
+
+**Stage B — Design hardening suggestions.** Report as `DEFER` by default. Stage B candidates include:
+
+- extra guards;
+- additional diagnostics;
+- additional edge cases;
+- alternative architecture;
+- improved UX;
+- broader test coverage.
+
+If a Stage B suggestion is promoted to `MUST_FIX_NOW`, cite the exact Stage A criterion it satisfies in the BLOCKING line — alongside the required `class:` and any `new_blocker_materiality:` field. Without that citation, the orchestrator treats the item as `DEFER`.
+
 ## Output format (strict)
 
 Line 1 must be exactly one of: `APPROVED` or `CHANGES_REQUESTED`.

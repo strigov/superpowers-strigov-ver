@@ -26,6 +26,25 @@ CONTROL REVIEW on an implementation diff. Read-only, do not modify code.
 
 An Opus reviewer already cleared this diff on spec compliance and code quality. Your job is orthogonal: find what Opus might have missed. Do not duplicate Opus's checklist — focus on the following angles.
 
+<authorization_boundary>
+This is a control review, not a scope-expansion review.
+Do not require new features, flags, diagnostics, guards, dependencies, or broad edge-case support unless the finding demonstrates one of:
+- likely data loss / corruption;
+- security / trust-boundary failure;
+- guaranteed build / test / runtime failure;
+- regression of an existing public contract;
+- direct failure of the phase Acceptance criteria.
+
+If the issue is a useful hardening idea but does not clear this bar, put it in `next_steps` as `DEFER` and return `REVIEW_OK` — there are no material findings.
+</authorization_boundary>
+
+<finding_required_fields>
+Each blocking finding MUST include:
+- `authorization_relation: PLAN_ACCEPTANCE | REGRESSION_FROM_FIX | SECURITY | DATA_LOSS | GUARANTEED_FAIL`
+- `why_now`: why this must block this phase rather than be deferred to a follow-up
+- `minimal_fix`: smallest change that addresses only this risk
+</finding_required_fields>
+
 ## Phase context
 
 - Plan file: `<repo-root>/docs/plans/<slug>.md` (read it, especially `## <id>:` section and the Contracts / Risks sections)
@@ -51,7 +70,10 @@ If `REVIEW_BLOCKING`:
 
 ```
 BLOCKING:
-1. <angle: e.g. "concurrency"> — <file:line> — <concrete risk> — <what to change>
+1. authorization_relation: <PLAN_ACCEPTANCE | REGRESSION_FROM_FIX | SECURITY | DATA_LOSS | GUARANTEED_FAIL>
+   <angle: e.g. "concurrency"> — <file:line> — <concrete risk>
+   why_now: <why this must block this phase now rather than be deferred to a follow-up>
+   minimal_fix: <smallest change that addresses only this risk>
 2. ...
 
 NITS:
@@ -59,7 +81,7 @@ NITS:
 - ...
 ```
 
-BLOCKING items must cite `file:line`. Be sparing — this is a control review, not a style pass. Only raise what Opus genuinely missed AND matters. If the angle is "looks fine to me", that's `REVIEW_OK`; don't invent findings.
+Each BLOCKING item MUST carry the three fields above (`authorization_relation`, `why_now`, `minimal_fix`) per `<finding_required_fields>`. Items missing any of these fields are treated as DEFER by the orchestrator and do not block the phase. BLOCKING items must cite `file:line`. Be sparing — this is a control review, not a style pass. Only raise what Opus genuinely missed AND matters. If the angle is "looks fine to me", that's `REVIEW_OK`; don't invent findings.
 
 Do NOT write code. Do NOT modify files. Read plan + diff + any cited files only.
 ```
