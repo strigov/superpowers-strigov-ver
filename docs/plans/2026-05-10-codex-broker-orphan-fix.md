@@ -1,14 +1,14 @@
 ---
 slug: codex-broker-orphan-fix
 created: 2026-05-10
-status: in-progress
+status: done
 phases:
   - id: Ф1
     scope: "broker core changes: shutdown promise, heartbeat, remove detached:true, parentPid, scanOrphanBrokers"
     status: done
   - id: Ф2
     scope: "integration test, SKILL.md update, full test suite verification"
-    status: in-progress
+    status: done
 ---
 
 # Codex Broker Orphan Process Cleanup Implementation Plan

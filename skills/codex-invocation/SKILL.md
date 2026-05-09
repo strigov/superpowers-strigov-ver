@@ -107,7 +107,9 @@ Task task-XXXX is still running. Use /codex:status before continuing it.
 
 Patching the on-disk JSON at `~/.claude/plugins/data/superpowers-strigov-ver-codex/state/<workspace-slug>/jobs/<task>.json` does **not** help — the broker holds state in memory via `broker.sock`, not on disk.
 
-**Workaround**: submit a fresh task with `--fresh` instead of `--resume-last`. Codex re-reads project context; new jobs start fine. Proper fix would be restarting the shared broker, but no documented command for that yet.
+**Workaround**: submit a fresh task with `--fresh` instead of `--resume-last`. Codex re-reads project context; new jobs start fine.
+
+Note: orphan broker processes from prior crashed Claude Code sessions are now cleaned up automatically - the broker self-terminates within ~6 s of its parent dying (heartbeat in `app-server-broker.mjs`), and `ensureBrokerSession` reaps any leftover orphans (including legacy state files without `parentPid`) on startup. The `--fresh` workaround above addresses a different symptom: stale in-memory job state inside a still-alive broker after an interrupted task.
 
 ## Never do
 
