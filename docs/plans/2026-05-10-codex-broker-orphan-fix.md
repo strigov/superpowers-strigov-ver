@@ -1,3 +1,16 @@
+---
+slug: codex-broker-orphan-fix
+created: 2026-05-10
+status: in-progress
+phases:
+  - id: Ф1
+    scope: "broker core changes: shutdown promise, heartbeat, remove detached:true, parentPid, scanOrphanBrokers"
+    status: in-progress
+  - id: Ф2
+    scope: "integration test, SKILL.md update, full test suite verification"
+    status: pending
+---
+
 # Codex Broker Orphan Process Cleanup Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use dev-orchestrator (recommended) or executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
