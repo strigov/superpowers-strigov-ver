@@ -61,10 +61,9 @@ export function spawnBrokerProcess({ scriptPath, cwd, endpoint, pidFile, logFile
   const child = spawn(process.execPath, [scriptPath, "serve", "--endpoint", endpoint, "--cwd", cwd, "--pid-file", pidFile], {
     cwd,
     env,
-    detached: true,
     stdio: ["ignore", logFd, logFd]
   });
-  child.unref();
+  child.unref();   // parent can exit without waiting for broker; broker self-terminates via heartbeat
   fs.closeSync(logFd);
   return child;
 }
@@ -99,6 +98,122 @@ export function clearBrokerSession(cwd) {
   }
 }
 
+function isProcessAlive(pid) {
+  if (!Number.isFinite(pid) || pid <= 1) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // ESRCH = no such process; EPERM = exists but we cannot signal.
+    return err.code === "EPERM";
+  }
+}
+
+function defaultStateRoot() {
+  const pluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
+  return pluginDataDir
+    ? path.join(pluginDataDir, "state")
+    : path.join(os.tmpdir(), "codex-companion");
+}
+
+function isWithinDir(filePath, dir) {
+  const resolved = path.resolve(filePath);
+  const resolvedDir = path.resolve(dir);
+  return resolved.startsWith(resolvedDir + path.sep) || resolved === resolvedDir;
+}
+
+function cleanupSessionFiles(stateFile, session, sessionDir) {
+  try { fs.unlinkSync(stateFile); } catch {}
+  if (typeof session?.pidFile === "string" && isWithinDir(session.pidFile, sessionDir)) {
+    try { fs.unlinkSync(session.pidFile); } catch {}
+  }
+  if (typeof session?.endpoint === "string") {
+    try {
+      const target = parseBrokerEndpoint(session.endpoint);
+      if (target.kind === "unix" && isWithinDir(target.path, sessionDir)) {
+        try { fs.unlinkSync(target.path); } catch {}
+      }
+    } catch {}
+  }
+}
+
+export async function scanOrphanBrokers({ stateRoot = defaultStateRoot() } = {}) {
+  const killed = [];
+  if (!fs.existsSync(stateRoot)) {
+    return killed;
+  }
+
+  let entries;
+  try {
+    entries = fs.readdirSync(stateRoot, { withFileTypes: true });
+  } catch {
+    return killed;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const sessionDir = path.join(stateRoot, entry.name);
+    const stateFile = path.join(sessionDir, BROKER_STATE_FILE);
+    if (!fs.existsSync(stateFile)) {
+      continue;
+    }
+
+    let session;
+    try {
+      session = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    } catch {
+      continue;
+    }
+
+    const brokerPid = Number(session?.pid);
+    const parentPidRaw = session?.parentPid;
+    const hasParentPid = Number.isFinite(Number(parentPidRaw));
+    const parentPid = hasParentPid ? Number(parentPidRaw) : null;
+
+    if (!Number.isFinite(brokerPid)) {
+      continue;
+    }
+
+    // Legacy state (no parentPid): from old detached-broker plugin version.
+    // Cannot determine parent liveness without parentPid. Kill if alive.
+    if (!hasParentPid) {
+      if (!isProcessAlive(brokerPid)) {
+        // Already dead; just clean up files.
+        cleanupSessionFiles(stateFile, session, sessionDir);
+        continue;
+      }
+      // Kill orphan and clean up.
+      try { process.kill(brokerPid, "SIGTERM"); } catch {}
+      killed.push({ pid: brokerPid, sessionDir, reason: "legacy-no-parentPid" });
+      cleanupSessionFiles(stateFile, session, sessionDir);
+      continue;
+    }
+
+    // Modern state files with parentPid.
+    if (!isProcessAlive(brokerPid)) {
+      continue;
+    }
+    if (parentPid !== 1 && isProcessAlive(parentPid)) {
+      continue;
+    }
+
+    // Orphan: broker alive, parent dead. Kill it.
+    try {
+      process.kill(brokerPid, "SIGTERM");
+    } catch {
+      // already gone; fall through to cleanup
+    }
+    killed.push({ pid: brokerPid, sessionDir });
+    cleanupSessionFiles(stateFile, session, sessionDir);
+  }
+
+  return killed;
+}
+
 async function isBrokerEndpointReady(endpoint) {
   if (!endpoint) {
     return false;
@@ -111,6 +226,13 @@ async function isBrokerEndpointReady(endpoint) {
 }
 
 export async function ensureBrokerSession(cwd, options = {}) {
+  // One-time sweep of orphan brokers from prior sessions / older plugin versions.
+  try {
+    await scanOrphanBrokers();
+  } catch {
+    // never block normal startup on cleanup failure
+  }
+
   const existing = loadBrokerSession(cwd);
   if (existing && (await isBrokerEndpointReady(existing.endpoint))) {
     return existing;
@@ -164,7 +286,8 @@ export async function ensureBrokerSession(cwd, options = {}) {
     pidFile,
     logFile,
     sessionDir,
-    pid: child.pid ?? null
+    pid: child.pid ?? null,
+    parentPid: process.pid
   };
   saveBrokerSession(cwd, session);
   return session;

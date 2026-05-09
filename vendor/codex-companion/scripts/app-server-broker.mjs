@@ -99,18 +99,26 @@ async function main() {
     }
   }
 
+  let shutdownPromise = null;
+
   async function shutdown(server) {
-    for (const socket of sockets) {
-      socket.end();
+    if (shutdownPromise) {
+      return shutdownPromise;
     }
-    await appClient.close().catch(() => {});
-    await new Promise((resolve) => server.close(resolve));
-    if (listenTarget.kind === "unix" && fs.existsSync(listenTarget.path)) {
-      fs.unlinkSync(listenTarget.path);
-    }
-    if (pidFile && fs.existsSync(pidFile)) {
-      fs.unlinkSync(pidFile);
-    }
+    shutdownPromise = (async () => {
+      for (const socket of sockets) {
+        socket.end();
+      }
+      await appClient.close().catch(() => {});
+      await new Promise((resolve) => server.close(resolve));
+      if (listenTarget.kind === "unix" && fs.existsSync(listenTarget.path)) {
+        fs.unlinkSync(listenTarget.path);
+      }
+      if (pidFile && fs.existsSync(pidFile)) {
+        fs.unlinkSync(pidFile);
+      }
+    })();
+    return shutdownPromise;
   }
 
   appClient.setNotificationHandler(routeNotification);
@@ -244,6 +252,28 @@ async function main() {
   });
 
   server.listen(listenTarget.path);
+
+  // Parent liveness heartbeat.
+  // After kill -9 of the parent (Claude Code or codex-companion.mjs), this broker
+  // is reparented to launchd (macOS) or init (Linux), making process.ppid === 1.
+  // SIGTERM/SIGINT handlers cannot fire on kill -9, so we poll instead.
+  // Ticks every 3s, with a grace period of 1 tick (3s) to avoid any startup race
+  // where ppid could theoretically read 1 before the parent fully attaches.
+  // Worst-case detection latency: 3s grace + 3s tick = 6s; AC1 budgets 10s.
+  const intervalMs = 3000;
+  let heartbeatGrace = 1;
+  const heartbeat = setInterval(async () => {
+    if (heartbeatGrace > 0) {
+      heartbeatGrace -= 1;
+      return;
+    }
+    if (process.ppid === 1) {
+      clearInterval(heartbeat);
+      await shutdown(server);
+      process.exit(0);
+    }
+  }, intervalMs);
+  heartbeat.unref();
 }
 
 main().catch((error) => {

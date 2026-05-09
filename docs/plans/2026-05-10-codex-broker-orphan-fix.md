@@ -5,10 +5,10 @@ status: in-progress
 phases:
   - id: Ф1
     scope: "broker core changes: shutdown promise, heartbeat, remove detached:true, parentPid, scanOrphanBrokers"
-    status: in-progress
+    status: done
   - id: Ф2
     scope: "integration test, SKILL.md update, full test suite verification"
-    status: pending
+    status: in-progress
 ---
 
 # Codex Broker Orphan Process Cleanup Implementation Plan
