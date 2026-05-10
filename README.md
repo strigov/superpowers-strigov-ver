@@ -2,7 +2,7 @@
 
 A Claude Code plugin that replaces the default "Claude does everything" mode with a **structured multi-model development workflow**: Sonnet orchestrates, Opus judges, Codex implements and reviews.
 
-Current repo/plugin version: `0.3.1`.
+Current repo/plugin version: `0.3.2`.
 
 ## The idea
 
