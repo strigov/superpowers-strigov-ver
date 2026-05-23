@@ -1,6 +1,6 @@
 ---
 name: executing-plans
-description: Use when you have a written implementation plan to execute in a separate session with review checkpoints
+description: Use ONLY for legacy upstream-style plans — plain markdown without YAML frontmatter, flat Task 1..N structure (no phases). For phased plans with YAML frontmatter (Ф1, Ф2, …), use dev-orchestrator instead — it honors phase boundaries, auto-commits per phase, and routes BE/FE phases to the right implementer.
 ---
 
 # Executing Plans
@@ -10,6 +10,8 @@ description: Use when you have a written implementation plan to execute in a sep
 Load plan, review critically, execute all tasks, report when complete.
 
 **Announce at start:** "I'm using the executing-plans skill to implement this plan."
+
+**Scope (this fork):** This skill is for **legacy upstream-style plans** — plain markdown without YAML frontmatter, flat `Task 1..N` structure (no phases). Plans produced by this fork's `writing-plans` are phased (YAML frontmatter + `## Ф1`, `## Ф2`, …) and should go through `dev-orchestrator` instead — it honors phase boundaries, auto-commits per phase, and routes BE/FE phases to the right implementer.
 
 **Note:** Tell your human partner that Superpowers works much better with access to subagents. The quality of its work will be significantly higher if run on a platform with subagent support (such as Claude Code or Codex). If subagents are available, use dev-orchestrator instead of this skill.
 
@@ -66,5 +68,6 @@ After all tasks complete and verified:
 
 **Required workflow skills:**
 - **using-git-worktrees** - REQUIRED: Set up isolated workspace before starting
-- **writing-plans** - Creates the plan this skill executes
 - **finishing-a-development-branch** - Complete development after all tasks
+
+**Note on plan source.** In this fork `writing-plans` produces phased plans for `dev-orchestrator`, not for this skill. Plans handled here come from upstream `superpowers` (where the upstream `writing-plans` produces flat Task 1..N), from external imports, or from pre-fork files.

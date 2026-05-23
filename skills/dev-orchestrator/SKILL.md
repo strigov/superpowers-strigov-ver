@@ -131,9 +131,9 @@ After triage (classified non-trivial), before dispatching Opus for a new plan:
 
 Never resume silently — always name the plan and wait for confirmation.
 
-### Plan files without frontmatter (legacy format)
+### Plan files without frontmatter (legacy migration only)
 
-If the found plan is plain markdown (no YAML frontmatter), offer the user a retrofit: dispatch Opus subagent with the existing file + current phase info (from user or `git log`) to write frontmatter in place, then commit `docs(plans): add frontmatter to <slug>`. Only then proceed.
+`writing-plans` now produces YAML frontmatter natively, so this path is rare. It only triggers for plans created before the format unification or imported from upstream `superpowers` (TDD-flat format). When you do hit one: offer the user a retrofit — dispatch Opus subagent with the existing file + current phase info (from user or `git log`) to write frontmatter in place, then commit `docs(plans): add frontmatter to <slug>`. Only then proceed. If you find yourself running retrofit on a freshly-written `writing-plans` plan, that's a bug in `writing-plans` — surface it, don't paper over.
 
 ## Full protocol
 
