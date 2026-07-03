@@ -1,7 +1,7 @@
 # superpowers-strigov-ver
 
 Personal Claude Code plugin assembled from:
-Current repo/plugin version: `0.3.3`.
+Current repo/plugin version: `0.3.4`.
 
 - **`dev-orchestrator`** — multi-model subagent-driven workflow (Opus plan + Codex xhigh plan-review loop + Codex high implement + Opus two-stage code review, auto-commit, loop cap=4 with anti-pingpong / no-progress guards).
 - **`codex-invocation`** — reference recipe for calling Codex via the `bin/codex-dispatch` wrapper around the vendored `codex-companion.mjs` (background mode + Monitor polling; bypasses the silent auto-reject on standard Agent/`codex exec` paths and pins the model to `gpt-5.5` to block backend auto-downgrade to spark).
