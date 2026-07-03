@@ -109,6 +109,16 @@ Do NOT just increase timeouts - find the real issue.
 Return: Summary of what you found and what you fixed.
 ```
 
+## Pre-Dispatch Checklist
+
+Run for EACH agent prompt before sending; fix the prompt if a check fails:
+
+1. **Scope named exactly** — specific file paths / test names, not "the failing tests".
+2. **Context pasted in** — error messages, test names, expected behavior. The agent sees nothing from this session.
+3. **Constraints explicit** — what NOT to touch, stated in the prompt.
+4. **Output format specified** — what the agent must return (e.g., "summary of root cause + files changed").
+5. **No file overlap** — no two concurrently dispatched agents may edit the same file. If they could, merge them into one agent or run them sequentially.
+
 ## Common Mistakes
 
 **❌ Too broad:** "Fix all the tests" - agent gets lost

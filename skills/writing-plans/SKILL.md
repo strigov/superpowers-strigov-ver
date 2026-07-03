@@ -28,7 +28,7 @@ Assume they are a skilled developer, but know almost nothing about our toolset o
 Agent(subagent_type="general-purpose", model="opus", description="Plan: <slug>", prompt=...)
 ```
 
-The subagent has NO session context. Construct a fully self-contained prompt that includes:
+**The prompt's literal first line MUST be `ultrathink`** (runs Opus at max thinking effort). The subagent has NO session context. Construct a fully self-contained prompt that includes:
 
 - User's original request verbatim.
 - Spec file path if available (e.g. when called after brainstorming) — otherwise paste the relevant requirements directly into the prompt.
@@ -36,6 +36,17 @@ The subagent has NO session context. Construct a fully self-contained prompt tha
 - Target plan path: `docs/plans/YYYY-MM-DD-<slug>.md` (unless user specified a custom location).
 - **All the guidance in this skill below (Scope Check through Self-Review)** — these sections define HOW Opus must write the plan. Paste them into the prompt; don't just reference the file.
 - Instruction to run the Self-Review inline after writing, fixing issues in place (no separate round trip).
+
+**Pre-dispatch verification — run on the assembled prompt before the Agent call:**
+
+1. The prompt's literal first line is `ultrathink`.
+2. Every bullet above is physically present in the prompt. In particular the FULL TEXT of these sections must be pasted in: Scope Check, File Structure, Bite-Sized Step Granularity, Plan Document Header, Required body sections, Phase Structure, No Placeholders, Remember, Self-Review. Litmus test: if the prompt does not contain the fenced YAML frontmatter template and the `## Ф1:` example layout, you referenced instead of pasted — go back and paste.
+3. No unfilled `<placeholder>` tokens remain (scan the prompt for `<`).
+4. All paths absolute.
+
+**After Opus returns — mechanical frontmatter validation (main thread):**
+
+Read the plan file's first 30 lines and check: file starts with `---`; frontmatter has `slug`, `created`, `status: in-progress`, and a `phases:` list; first phase `status: in-progress`, all others `status: pending`; every `phases[].id` matches a `## <id>:` H2 in the body (check via `grep -n '^## Ф' <plan-file>`); if any `parallel_group` is present, each group id appears on exactly 2 phases. If a check fails: frontmatter-only defects you may fix mechanically yourself; body defects → re-dispatch Opus naming the specific defect. Do not send a malformed plan to Codex review.
 
 This skill produces plans in the YAML-frontmatter + phases format consumed natively by `dev-orchestrator`. The TDD discipline (failing test → minimal impl → passing test → commit) lives **inside** each phase as the step pattern — phases are the orchestration unit, TDD steps are the work pattern. The canonical format definition lives in `../dev-orchestrator/opus-plan-prompt.md` Mode A — keep this skill's format guidance below in sync with it.
 
@@ -77,6 +88,8 @@ This structure informs the phase decomposition. Each phase should produce self-c
 - "Run the tests and make sure they pass" - step
 - "Commit" - step (the last step of the phase commits the whole phase)
 
+Note: when the plan is executed via `dev-orchestrator`, the final "Commit" step is performed by the orchestrator's auto-commit, not by the Codex implementer — the implementer prompt tells it to skip that step and leave the working tree uncommitted for review. Keep the step in the plan anyway: it documents intent and serves direct human execution.
+
 ## Plan Document Header
 
 **Every plan MUST start with YAML frontmatter followed by a markdown title:**
@@ -93,6 +106,11 @@ phases:
   - id: Ф2
     scope: "..."
     status: pending
+    parallel_group: G1        # optional — see "Parallel groups" in decomposition rules
+  - id: Ф3
+    scope: "..."
+    status: pending
+    parallel_group: G1
 ---
 
 # [Feature Name] Implementation Plan
@@ -132,6 +150,7 @@ Self-Review (see below) is a check Opus runs in-process while writing — it is 
 - Prefer 2–5 phases. More than 5 is a signal to split into multiple plans.
 - Put risky / blocking decisions as early as possible so later phases can assume they're settled.
 - **Backend / frontend split (required for full-stack work)**: if a candidate phase would touch BOTH backend (.py, .rs, .go, .java, server-side .ts/.js, SQL, protobuf, etc.) AND frontend (.tsx, .jsx, .vue, .svelte, .css, .scss), split it into two phases — one BE, one FE — with an explicit contract between them. Reason: `dev-orchestrator` routes BE phases to Codex and FE phases to a Claude subagent; mixed phases cannot be dispatched cleanly.
+- **Parallel groups (optional)**: mark exactly two phases with the same `parallel_group: G<n>` in the frontmatter `phases[]` ONLY when ALL of: (a) their file sets are fully disjoint; (b) neither depends on the other's *implementation* — only on contracts frozen in `## Contracts` (a BE+FE pair with an explicit contract is the canonical case); (c) each phase still commits independently. The orchestrator builds a marked group concurrently in separate git worktrees and merges afterwards — overlapping files or an implementation dependency guarantee a failed merge. When in doubt, do NOT mark: sequential is always correct.
 
 ### Per-phase layout
 

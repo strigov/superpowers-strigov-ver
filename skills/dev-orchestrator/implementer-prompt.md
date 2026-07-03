@@ -9,12 +9,13 @@ Use when dispatching implementation to Codex high.
   --background \
   --write \
   --effort high \
-  "<prompt below>"
+  [--cwd <worktree-path>] \
+  --prompt-file <scratch>/implement-<phase-id>.md
 ```
 
-`$DISPATCH` is the `codex-dispatch` wrapper — resolve it once per session per the `codex-invocation` skill.
+`$DISPATCH` is the `codex-dispatch` wrapper — resolve it once per session per the `codex-invocation` skill. Write the filled prompt to a scratch file first and pass it via `--prompt-file` — do not inline multi-line text. For a parallel-track phase, add `--cwd <worktree-path>` so Codex works in that track's worktree (and use the same `--cwd` on `status`/`result`).
 
-For follow-up rounds after the fused review (Step 4), add `--resume-last` and pass the COMBINED BLOCKING list (from Opus review + Codex xhigh control review, merged by the orchestrator) — no full re-briefing.
+For follow-up rounds after the fused review (Step 4), dispatch a **FRESH task** (same flags, NO `--resume-last`) with the follow-up template below — it re-briefs the plan path + phase id and carries the authorized blockers. Do NOT use `--resume-last` here: the control reviewer ran between implementer rounds, so `--resume-last` would resume the reviewer's read-only thread, not this implementer's (see `codex-invocation` "Resume semantics"). `--resume-last` remains correct only for the immediate `NEEDS_CONTEXT` / effort-upgrade re-dispatch in Step 3, where no other Codex task ran in between.
 
 Poll with Monitor using the terminal-only filter from `codex-invocation`. Fetch via `"$DISPATCH" result task-XXXX`.
 
@@ -31,9 +32,10 @@ Read the entire file including YAML frontmatter. Your task: implement phase **`<
 
 ## Context
 
-- Repository root: [path]
+- Repository root: [path — may be a git worktree when this phase runs as a parallel track; treat it as the entire universe and never touch paths outside it]
 - Style / patterns to follow: [e.g., "match existing module X", "use repository's existing logger"]
 - Other phases already done (for context, do not modify): [list of done phase ids + their commits, if any]
+- Parallel track note (include only when applicable): another phase is being implemented concurrently in a separate worktree. Its files are NOT in your scope; if your phase seems to need changes in them, stop and report `BLOCKED` — do not improvise the other phase's side.
 
 ## Before you begin
 
@@ -57,6 +59,7 @@ Do not guess.
 - **File responsibility**: follow the file layout from the plan. If a file grows beyond the plan's intent, stop and report `DONE_WITH_CONCERNS` — do not split files on your own.
 - **Existing patterns**: match established conventions in the repo. Improve code you're touching, but do not restructure anything outside your task.
 - **No unrelated commits**: do not modify files outside the plan's scope, even for "cleanups".
+- **Git**: do NOT run `git commit`, `git push`, or any history-modifying git command — leave all changes uncommitted in the working tree. The orchestrator reviews the diff and handles git itself. (If the plan's last step says "Commit the phase", skip that step and note it in your report.)
 
 ## Self-review before reporting
 
@@ -79,7 +82,7 @@ STOP and escalate (`BLOCKED`) when:
 
 ## Report format (strict)
 
-Emit one report at the end. First line is status:
+Emit one report at the end. Line 1 is the bare status token — no preamble, no markdown formatting:
 
 `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`
 
@@ -93,10 +96,18 @@ Then:
 Do NOT silently produce work you're unsure about — use `DONE_WITH_CONCERNS`.
 ```
 
-## Follow-up prompt (round 2+, with `--resume-last`)
+## Follow-up prompt (round 2+ — FRESH task, no `--resume-last`)
 
 ```
-Previous implementation had blocking issues from the fused review (Opus + Codex xhigh control). Fix only the AUTHORIZED_BLOCKERS below, re-test, re-report.
+You are in the fix round of a review loop. A previous Codex run implemented one phase of an approved plan; the fused review (Opus + Codex xhigh control) found blocking issues. You are a fresh session with no memory of that run — re-read the context below, then fix ONLY the AUTHORIZED_BLOCKERS, re-test, re-report.
+
+## Plan + phase (authoritative — read it)
+
+Path: `<repo-root>/docs/plans/<slug>.md`. Your phase: **`<id>`** (scope: `<one-line scope from frontmatter>`). The phase's implementation is the un-committed diff in the working tree — inspect it via `git diff <base-sha>`.
+
+## Git
+
+Do NOT run `git commit` / `git push` / history-modifying git commands. Leave all changes uncommitted — the orchestrator handles git.
 
 ## AUTHORIZED_BLOCKERS
 
@@ -129,7 +140,7 @@ so the orchestrator can extend the ledger before you continue.
 
 ## Required output
 
-First line is the status token:
+Line 1 is the bare status token — no preamble, no markdown formatting:
 
 `DONE` | `DONE_WITH_CONCERNS` | `NEEDS_AUTHORIZATION` | `BLOCKED`
 

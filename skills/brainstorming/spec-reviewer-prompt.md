@@ -8,14 +8,14 @@ Use when dispatching a design spec review to Codex xhigh after Opus writes the s
 "$DISPATCH" task \
   --background \
   --effort xhigh \
-  "<prompt below>"
+  --prompt-file <scratch>/spec-review.md
 ```
 
-`$DISPATCH` is the `codex-dispatch` wrapper — resolve it once per session per the `codex-invocation` skill.
+`$DISPATCH` is the `codex-dispatch` wrapper — resolve it once per session per the `codex-invocation` skill. Write the filled prompt to a scratch file first and pass it via `--prompt-file` — do not inline multi-line text.
 
 No `--write`. Review is read-only.
 
-For round 2+, add `--resume-last` and tell Codex the spec file was updated and must be re-read. Do NOT send the full spec text — always point to the file.
+For round 2+, add `--resume-last` and tell Codex the spec file was updated and must be re-read. (`--resume-last` is safe in THIS loop: the revision between rounds is an Opus subagent, so the newest Codex thread is this reviewer's own. If stale-lock forces `--fresh`, send the full first-round prompt + a digest of prior rounds instead of the follow-up prompt.) Do NOT send the full spec text — always point to the file.
 
 Poll with Monitor using the terminal-only filter from the `codex-invocation` skill. Fetch result via `"$DISPATCH" result task-XXXX`.
 
@@ -51,7 +51,7 @@ Flag issues in these categories:
 
 ## Output format (strict)
 
-Line 1 must be exactly one of: `APPROVED` or `CHANGES_REQUESTED`.
+Line 1 must be exactly the bare token `APPROVED` or `CHANGES_REQUESTED` — no preamble, no markdown heading, no bold.
 
 **If `CHANGES_REQUESTED`**, after line 1 emit:
 

@@ -46,6 +46,16 @@ You MUST create a task for each of these items and complete them in order:
 9. **User reviews written spec** — ask user to review the spec file before proceeding
 10. **Transition to implementation** — invoke writing-plans skill to create implementation plan
 
+## Pre-send self-check (every message during the dialogue)
+
+Before sending EACH message while this skill is active, verify — and rewrite the message if any check fails:
+
+1. **Which checklist step (1–10) am I on?** Name it to yourself. If you can't, re-read the Checklist before sending anything.
+2. **At most ONE question in this message.** Count the question marks — two or more questions means rewrite into one.
+3. **Visual Companion offer is alone.** If this message offers the companion, it contains nothing else.
+4. **HARD-GATE intact.** No code, no file edits, no scaffolding, no implementation-skill invocation before the user approved the design.
+5. **Opus output is presented, not dumped.** If this message relays subagent results, it is conversational and leads with the recommendation.
+
 ## Process Flow
 
 ```dot
@@ -108,6 +118,29 @@ Dispatch Opus subagent with a self-contained prompt. **The prompt MUST begin wit
 - Any constraints or preferences the user stated
 - Ask: "Propose 2-3 different approaches with trade-offs. Lead with your recommended option and explain why."
 
+Copy-paste skeleton (fill every `<...>`; delete nothing except placeholders you replace):
+
+```
+ultrathink
+
+You are helping during a brainstorming session. Propose 2-3 different approaches for the task below, with trade-offs. Lead with your recommended option and explain why.
+
+## User's original request (verbatim)
+<paste the user's message>
+
+## Project context gathered
+<relevant files, docs, recent commits — summarized findings, not raw dumps>
+
+## Clarifying Q&A so far
+Q: <question> → A: <user's answer>
+Q: ... → A: ...
+
+## Constraints / preferences the user stated
+<paste, or "none stated">
+
+Return: for each approach — a name, 2-3 sentence description, pros, cons, and when it wins. Mark your recommended option first and explain the recommendation.
+```
+
 When Opus returns, present the options to the user conversationally — don't dump the subagent's output verbatim. Lead with Opus's recommendation and reasoning. You may paraphrase for fit with the ongoing dialogue, but do not invent options Opus didn't propose.
 
 **Presenting the design:**
@@ -142,9 +175,40 @@ Dispatch Opus subagent with a self-contained prompt. **The prompt MUST begin wit
 - Instruction to use the elements-of-style:writing-clearly-and-concisely skill if available
 - Instruction to run the self-review pass (below) inline before returning, fixing issues in place
 
+Copy-paste skeleton (fill every `<...>`):
+
+```
+ultrathink
+
+Write a design spec document based on the approved design below. Write the file yourself (you have Write/Edit tools). Do NOT commit.
+
+## Target path
+<repo-root>/docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md   (create directories if missing)
+
+## User's original request (verbatim)
+<paste>
+
+## Constraints
+<paste, or "none stated">
+
+## Approved design (verbatim, as the user approved it)
+<paste ALL design sections from the dialogue>
+
+## Style
+If the elements-of-style:writing-clearly-and-concisely skill is available, use it.
+
+## Self-review (run inline after writing, fix issues in place, no separate round trip)
+1. Placeholder scan: any 'TBD', 'TODO', incomplete sections, vague requirements? Fix them.
+2. Internal consistency: do sections contradict each other? Does architecture match feature descriptions?
+3. Scope check: focused enough for a single implementation plan, or does it need decomposition?
+4. Ambiguity check: could any requirement be read two ways? Pick one, make it explicit.
+
+Return: the spec file path + one-paragraph summary of what the spec covers and any decisions you made where the design was ambiguous.
+```
+
 Opus writes the file directly (general-purpose agent has Write/Edit tools). After Opus returns, do NOT commit yet — first run Codex xhigh spec review (see below).
 
-**Spec Self-Review (include in Opus prompt):**
+**Spec Self-Review (already embedded in the skeleton above — keep it when editing the prompt):**
 
 Instruct Opus: "After writing the spec, review it with fresh eyes and fix inline. No need to re-review — just fix and move on:
 

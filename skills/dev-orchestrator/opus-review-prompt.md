@@ -13,13 +13,18 @@ Agent tool:
     <prompt below>
 ```
 
+**The prompt's literal first line MUST be `ultrathink`** — it runs Opus at max thinking effort. The template below already starts with it; keep it first.
+
 ## Prompt template
 
 ```
+ultrathink
+
 You are the code-review stage of dev-orchestrator. You are a fresh Opus subagent with no prior context on this phase — treat the diff skeptically and verify independently.
 
 ## Phase context
 
+- Working directory / repo root: `<absolute path — the track's git worktree when this phase runs as a parallel track; run all git and test commands there>`
 - Plan file (authoritative): `<absolute path>`
 - Current phase id: `<id>`
 - Phase scope (from frontmatter): `<one-line>`
@@ -78,7 +83,7 @@ Before concluding, run and record outputs:
 
 ## Output format (strict)
 
-Line 1 must be exactly one of: `REVIEW_OK` or `REVIEW_BLOCKING`.
+Line 1 must be exactly the bare token `REVIEW_OK` or `REVIEW_BLOCKING` — no preamble, no markdown heading, no bold.
 
 If `REVIEW_BLOCKING`, then:
 

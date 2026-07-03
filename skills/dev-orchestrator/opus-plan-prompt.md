@@ -15,11 +15,15 @@ Agent tool:
 
 The subagent has NO session context. The prompt must be fully self-contained — include user's original request, repo path, any conventions or constraints you know, and the previous plan (if revising).
 
+**The prompt's literal first line MUST be `ultrathink`** — it runs Opus at max thinking effort. Both templates below already start with it; keep it first when filling them in.
+
 ---
 
 ## Mode A: Write a new plan (Step 1)
 
 ```
+ultrathink
+
 You are writing an implementation plan for a multi-phase feature. This is dispatched by dev-orchestrator; the orchestrator (Sonnet main thread) will then send your plan to Codex xhigh for review.
 
 ## User's original request (verbatim)
@@ -54,6 +58,11 @@ phases:
   - id: Ф2
     scope: "..."
     status: pending
+    parallel_group: G1        # optional — see "Parallel groups" in decomposition rules
+  - id: Ф3
+    scope: "..."
+    status: pending
+    parallel_group: G1
 ---
 ```
 
@@ -85,6 +94,7 @@ List explicit exclusions. Reviewers MUST classify requests for these as `REJECTE
 - Prefer 2–5 phases. More than 5 is a signal to split into multiple plans.
 - Put risky / blocking decisions as early as possible so later phases can assume they're settled.
 - **Backend / frontend split (required for full-stack work)**: if a candidate phase would touch BOTH backend (.py, .rs, .go, .java, server-side .ts/.js, SQL, protobuf, etc.) AND frontend (.tsx, .jsx, .vue, .svelte, .css, .scss), split it into two phases — one BE, one FE — with an explicit contract between them (API endpoint shape, request/response schema, event names, data types). Reason: the orchestrator routes BE phases to Codex and FE phases to a Claude subagent; mixed phases cannot be dispatched cleanly.
+- **Parallel groups (optional)**: mark exactly two phases with the same `parallel_group: G<n>` in the frontmatter `phases[]` ONLY when ALL of: (a) their file sets are fully disjoint; (b) neither depends on the other's *implementation* — only on contracts frozen in `## Contracts` (a BE+FE pair with an explicit contract is the canonical case); (c) each phase still commits independently. The orchestrator builds a marked group concurrently in separate git worktrees and merges afterwards — overlapping files or an implementation dependency guarantee a failed merge. When in doubt, do NOT mark: sequential is always correct.
 
 ## Discipline
 
@@ -112,6 +122,8 @@ That's it. Do NOT commit — the orchestrator handles git.
 The orchestrator dispatches Mode B after Codex xhigh returned `CHANGES_REQUESTED` and the orchestrator has triaged the findings into the AUTHORIZED_CHANGE_LEDGER (see `dev-orchestrator/SKILL.md` "## Authorized Change Ledger"). The ledger is the single authoritative input for this dispatch — work only on its open ACCEPTED / PARTIALLY_ACCEPTED items.
 
 ```
+ultrathink
+
 You are revising an implementation plan based on reviewer feedback. Do not rewrite from scratch — apply only the changes the orchestrator has authorized via the ledger below.
 
 ## Plan file to revise

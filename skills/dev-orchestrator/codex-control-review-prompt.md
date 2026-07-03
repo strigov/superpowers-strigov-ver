@@ -8,14 +8,15 @@ Use AFTER Opus review (Step 4.1) returned `REVIEW_OK`. This is a second-opinion 
 "$DISPATCH" task \
   --background \
   --effort xhigh \
-  "<prompt below>"
+  [--cwd <worktree-path>] \
+  --prompt-file <scratch>/control-review.md
 ```
 
-`$DISPATCH` is the `codex-dispatch` wrapper — resolve it once per session per the `codex-invocation` skill.
+`$DISPATCH` is the `codex-dispatch` wrapper — resolve it once per session per the `codex-invocation` skill. Write the filled prompt to a scratch file first and pass it via `--prompt-file` — do not inline multi-line text. When reviewing a parallel-track phase, add `--cwd <worktree-path>` (and use the same `--cwd` on `status`/`result`).
 
 No `--write`. This is read-only review.
 
-For round 2+ in the same Step 4 loop, add `--resume-last` and tell Codex the diff was updated (new fixes from Codex high). Do NOT re-send full prompt — `--resume-last` carries prior context.
+For round 2+ in the same Step 4 loop, dispatch a **FRESH task** with the follow-up template below (full context, no `--resume-last`). Do NOT use `--resume-last` here: the fixer (Codex high) ran between control-review rounds, so it would resume the fixer's thread — and a control review that continues the conversation of the code it is checking is no longer an independent second opinion (see `codex-invocation` "Resume semantics").
 
 Poll with Monitor using the terminal-only filter from `codex-invocation`. Fetch via `"$DISPATCH" result task-XXXX`.
 
@@ -35,7 +36,7 @@ Do not require new features, flags, diagnostics, guards, dependencies, or broad 
 - regression of an existing public contract;
 - direct failure of the phase Acceptance criteria.
 
-If the issue is a useful hardening idea but does not clear this bar, put it in `next_steps` as `DEFER` and return `REVIEW_OK` — there are no material findings.
+If the issue is a useful hardening idea but does not clear this bar, put it in the `DEFER:` section of your output and return `REVIEW_OK` — there are no material findings.
 Items the orchestrator marked `REJECTED_BY_SCOPE` in the AUTHORIZED_CHANGE_LEDGER are out of scope for this control review — do not re-flag them.
 </authorization_boundary>
 
@@ -65,7 +66,7 @@ Each blocking finding MUST include:
 
 ## Output format (strict)
 
-Line 1 must be exactly one of: `REVIEW_OK` or `REVIEW_BLOCKING`.
+Line 1 must be exactly the bare token `REVIEW_OK` or `REVIEW_BLOCKING` — no preamble, no markdown heading, no bold.
 
 If `REVIEW_BLOCKING`:
 
@@ -77,26 +78,42 @@ BLOCKING:
    minimal_fix: <smallest change that addresses only this risk>
 2. ...
 
+DEFER:
+- <useful hardening idea that does not clear the bar> — <file:line or scope>
+- ...
+
 NITS:
 - <nit> — informational only, do NOT trigger another round
 - ...
 ```
+
+If `REVIEW_OK`: after line 1 emit only the `DEFER:` and `NITS:` sections (omit either if empty). Nothing else.
 
 Each BLOCKING item MUST carry the three fields above (`authorization_relation`, `why_now`, `minimal_fix`) per `<finding_required_fields>`. Items missing any of these fields are treated as DEFER by the orchestrator and do not block the phase. BLOCKING items must cite `file:line`. Be sparing — this is a control review, not a style pass. Only raise what Opus genuinely missed AND matters. If the angle is "looks fine to me", that's `REVIEW_OK`; don't invent findings.
 
 Do NOT write code. Do NOT modify files. Read plan + diff + any cited files only.
 ```
 
-## Follow-up prompt (round 2+, with `--resume-last`)
+## Follow-up prompt (round 2+ — FRESH task, no `--resume-last`)
+
+Send the FULL first-round prompt again (all sections: authorization boundary, finding required fields, phase context, review angles, output format), with these modifications:
+
+1. Replace the opening paragraph with:
 
 ```
-The diff has been updated by Codex high based on your prior BLOCKING list. Re-read the current diff — `git diff <base-sha>` again. Same review rules, same output format.
+CONTROL REVIEW, round <k> of a fix loop. Read-only, do not modify code.
 
-Focus on the delta between the previous diff and the current diff. The orchestrator's AUTHORIZED_CHANGE_LEDGER (`<repo-root>/docs/plans/<slug>.ledger.json`) lists what was authorized; do NOT block on pre-existing issues unrelated to the authorized fixes unless they clear the high-materiality bar — data loss/corruption, security/trust-boundary failure, guaranteed build/test/runtime failure, regression of an existing public contract, or direct failure of the phase acceptance criteria. Latent issues outside that bar belong in `NITS:` (informational), not BLOCKING.
+An earlier control review of this diff produced blocking findings; the implementer has since applied authorized fixes. You are a fresh session with no memory of prior rounds. Re-read the current diff — `git diff <base-sha>`.
 
-## What the implementer did with your prior blocking list
+Verify first that each open ACCEPTED item in the AUTHORIZED_CHANGE_LEDGER (`<repo-root>/docs/plans/<slug>.ledger.json`) is fixed correctly. Then check the fix delta for new problems. Do NOT block on pre-existing issues unrelated to the authorized fixes unless they clear the high-materiality bar (data loss/corruption, security/trust-boundary failure, guaranteed build/test/runtime failure, regression of an existing public contract, direct failure of the phase acceptance criteria) — latent issues outside that bar belong in DEFER/NITS.
+```
 
-<for each prior BLOCKING item: "Fixed in <file:line>" / "Rejected — reason">
+2. Append this section before the output format:
 
-Review again. Do not repeat items explicitly rejected with reasoning unless you have a new argument.
+```
+## What the implementer did with the prior blocking list
+
+<for each prior BLOCKING ledger item: "<ledger id>: Fixed in <file:line>" / "Rejected — reason: ...">
+
+Do not re-raise items the orchestrator marked REJECTED_BY_SCOPE or rejected with reasoning unless you have a genuinely new argument.
 ```

@@ -40,7 +40,7 @@ Read the entire file including YAML frontmatter. Your task: implement phase **`<
 
 ## Context
 
-- Repository root: [path]
+- Repository root: [path — may be a git worktree when this phase runs as a parallel track; treat it as the entire universe and never touch paths outside it]
 - Framework / component library: [e.g., React 19 + Tailwind, Vue 3 + Naive UI, SvelteKit + shadcn-svelte]
 - Design tokens / patterns to respect: [e.g., "spacing scale from tokens.css", "button variants in components/ui/Button.tsx"]
 - Visual references (screenshots, mockups, links): [paths / URLs if any]

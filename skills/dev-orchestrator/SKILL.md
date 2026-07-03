@@ -1,6 +1,6 @@
 ---
 name: dev-orchestrator
-description: Multi-model subagent-driven workflow. Use when user requests implementation (ru: реализуй, напиши, имплементируй, запили, сделай реализацию, запрогай, накодь; en: implement, code this, build this feature, write the code). Sonnet main thread orchestrates (triage, dispatching, polling, git, transitions). Opus invoked as subagent for judgment (plan writing, plan revision, code review, escalation analysis). Codex xhigh reviews plan (loop cap=4) and performs a control review on the diff after Opus review passes (fused loop cap=4). Codex high implements. Auto-commits on clean review unless user opts out. Routes trivial single-file edits to a Sonnet subagent instead.
+description: Multi-model subagent-driven workflow. Use when user requests implementation (ru: реализуй, напиши, имплементируй, запили, сделай реализацию, запрогай, накодь; en: implement, code this, build this feature, write the code). Sonnet main thread orchestrates (triage, dispatching, polling, git, transitions). Opus invoked as subagent for judgment (plan writing, plan revision, code review, escalation analysis). Codex xhigh reviews plan (loop cap=4) and performs a control review on the diff after Opus review passes (fused loop cap=4). Codex high implements. Plan-marked parallel groups run as 2 concurrent tracks in git worktrees. Auto-commits on clean review unless user opts out. Routes trivial single-file edits to a Sonnet subagent instead.
 ---
 
 # Dev Orchestrator
@@ -19,7 +19,7 @@ If you catch yourself about to call `Write` / `Edit` / `NotebookEdit` on a sourc
 
 The ONLY exceptions — edits you may perform directly on main thread:
 - Plan file (`docs/plans/<slug>.md`) — frontmatter status flips during auto-commit. Reason: mechanical metadata bookkeeping, not production code.
-- Git operations (`git add`, `git commit` via Bash). Reason: staging/committing are orchestrator work.
+- Git operations (`git add`, `git commit`, and — for parallel groups — `git worktree add/remove`, `git merge`, `git branch -d` via Bash). Reason: staging/committing/merging are orchestrator work.
 
 ### Rule 2 — no research on main
 
@@ -75,10 +75,35 @@ The density of the user's message is a signal to dispatch Opus **harder**, not t
 
 Your only jobs, in order: triage → resume-check → dispatch → poll → collect verdicts → bookkeeping (git + plan frontmatter) → transition to next phase → report. Judgment work (planning, reviewing, diagnosing `BLOCKED`) is delegated to Opus subagent, not done on main.
 
+## Protocol state line (every turn)
+
+While this skill is active, begin every assistant turn with one bracketed state line:
+
+`[dev-orchestrator] step=<triage | resume-check | 1-plan | 2-plan-review | 3-implement | 4-fused-review | commit | archive> phase=<Ф-id or —> round=<k>/4 gate=<armed | passed>`
+
+Fill it from your working memory of the protocol. If you cannot fill a field, you have lost protocol state — re-read the plan-file frontmatter (allowed read) and this skill before doing anything else. Never skip the state line "because the turn is short"; it is exactly the long, multi-round sessions where skipping it lets the protocol drift.
+
+## Verdict parsing (all reviewer / implementer outputs)
+
+Verdicts are machine-read from **line 1 only** of the result. Expected token sets:
+
+- Codex plan review (Step 2): `APPROVED` | `CHANGES_REQUESTED`
+- Opus review (Step 4.1) and Codex control review (Step 4.2): `REVIEW_OK` | `REVIEW_BLOCKING`
+- Implementer (Step 3 / fix rounds): `DONE` | `DONE_WITH_CONCERNS` | `NEEDS_CONTEXT` | `NEEDS_AUTHORIZATION` | `BLOCKED`
+- Integration check (parallel groups): `INTEGRATION_OK` | `INTEGRATION_FAIL`
+
+Procedure:
+1. Take the first non-empty line of the result; strip whitespace and markdown emphasis.
+2. Exact match against the step's token set → follow that step's verdict handling.
+3. No exact match → output is malformed. Re-dispatch ONCE (Codex: `--resume-last`; Claude: fresh Agent call) saying: "Your previous output did not start with a valid verdict token. Re-emit the full report with line 1 exactly one of: <tokens>."
+4. Still malformed → escalate to the user with the raw output attached.
+
+Never infer a verdict from prose, and never treat a missing token as approval — a report that "sounds positive" without its token is malformed, not APPROVED.
+
 ## Model split (intended defaults; rules above hold regardless of what user actually runs)
 
 - **Main thread** — orchestration only. Intended default: Sonnet medium (cheap, fast enough for dispatching). If user runs Opus on main, the rules above still hold — you still orchestrate, you still never write code.
-- **Opus subagent** — judgment: Step 1 plan writing, Step 2 plan revision, Step 4.1 code review, escalation summaries. Dispatched via `Agent(subagent_type="general-purpose", model="opus", prompt=...)`. Subagent has NO session context — prompt must be fully self-contained.
+- **Opus subagent** — judgment: Step 1 plan writing, Step 2 plan revision, Step 4.1 code review, escalation summaries. Dispatched via `Agent(subagent_type="general-purpose", model="opus", prompt=...)`. Subagent has NO session context — prompt must be fully self-contained. **The prompt's literal first line MUST be `ultrathink`** (runs Opus at max thinking effort; the sibling prompt templates already start with it — keep it first).
 - **Codex xhigh** — read-only roles, no `--write`:
   - Step 2: plan review.
   - Step 4.2: control review on the diff after Opus review returned clean.
@@ -87,6 +112,18 @@ Your only jobs, in order: triage → resume-check → dispatch → poll → coll
 - **Sonnet quickfix subagent** — trivial path only.
 
 Codex is invoked via `companion.mjs --background` + Monitor poll — standard Agent/codex-rescue paths silently auto-reject on this machine. Read the `codex-invocation` skill before your first Codex call in a session.
+
+## Pre-dispatch checklist (every Agent / Codex dispatch)
+
+Run this checklist on the assembled prompt BEFORE sending any subagent or Codex task. If any check fails, fix the prompt first — do not dispatch and patch later.
+
+1. **No unfilled placeholders.** Scan the prompt text for `<` and confirm every remaining angle-bracket token from the template was replaced with a real value.
+2. **Absolute paths** for repo root, plan file, ledger file.
+3. **User's request verbatim** where the template asks for it — paste, never paraphrase.
+4. **Self-contained.** The subagent sees nothing from this session. Anything you "already said" or "already know" must be physically in the prompt.
+5. **Codex only:** `--background` present; effort correct (plan / spec / control review = `xhigh`, implementation = `high`); `--write` ONLY on implementation dispatches; `--resume-last` ONLY where the previous Codex task in the repo is the same role's prior round — Step 2 loop yes, Step 4 loop NEVER (see `codex-invocation` "Resume semantics").
+6. **Opus subagent only:** the prompt's literal first line is `ultrathink` (runs Opus at max thinking effort).
+7. **Round 2+ only:** ledger path present AND open ACCEPTED / PARTIALLY_ACCEPTED items inlined.
 
 ## Triage (first decision)
 
@@ -155,6 +192,7 @@ phases:
   - id: Ф2
     scope: "..."
     status: pending
+    parallel_group: G1        # optional — two phases sharing a group id run as parallel tracks
 ---
 ```
 
@@ -175,11 +213,13 @@ Verdict handling:
   - **(b) Write/update ledger** at `docs/plans/<slug>.ledger.json` with this round's items — ids `R<round>-B<n>`, reviewer `codex-plan`. If the file already exists from a prior round, first update those entries' `status` (`fixed` / `rejected` / `deferred`) based on what the latest plan revision did, then append the new round's entries.
   - **(c) Dispatch Opus revision.** Use `./opus-plan-prompt.md` (revision mode); pass the plan-file path, the ledger path (`docs/plans/<slug>.ledger.json`), and the open ACCEPTED / PARTIALLY_ACCEPTED items inline. Opus updates the plan file in place.
   - **(d) Re-dispatch Codex xhigh** with `--resume-last` — tell it the plan file was updated and pass the ledger path so it can verify each ACCEPTED item is addressed. Increment counter.
-- Round 4 without APPROVED → escalate: plan-file path + last blocking list + one-sentence disagreement summary (have Opus write the summary). User picks: accept / another round / close.
+**Loop-control checks — run IN ORDER after every `CHANGES_REQUESTED`, before dispatching a fix round. First match wins; if a check fires, stop and do what it says.**
 
-**Anti-pingpong**: if Codex repeats a blocking point that was explicitly rejected with reasoning in a prior round, mark `resolved-by-decision`, do not loop on it.
-**No-progress detector**: if two consecutive rounds produce an identical blocking list (by content), escalate immediately.
-**New-blocker churn detector**: escalate immediately, even before cap=4, if (a) all blockers from the previous round are fixed or rejected-by-scope (per the ledger), AND (b) the reviewer returns only NEW `MUST_FIX_NOW` items, AND (c) none cite DATA_LOSS, SECURITY, or GUARANTEED_FAIL materiality. Escalation summary must include: prior blockers closed; new blockers with their materiality labels; recommendation — approve now plus defer list, OR authorize another high-materiality round. Findings classed `REGRESSION_FROM_AUTHORIZED_FIX` are NOT counted as "new MUST_FIX_NOW only" — they are causally tied to a prior accepted fix and don't trigger churn escalation.
+1. **Anti-pingpong filter.** Remove from the blocking list any item that repeats a point explicitly rejected with reasoning in a prior round — mark it `resolved-by-decision` in the ledger. If the list becomes empty after filtering, treat the verdict as `APPROVED` and proceed accordingly.
+2. **No-progress detector.** Blocking list identical (by content) to the previous round's → escalate immediately: plan-file path + the repeated list + one-sentence impasse summary (have Opus write the summary). User picks: accept / another round / close.
+3. **New-blocker churn detector.** Escalate immediately, even before cap=4, if ALL three hold: (a) every blocker from the previous round is fixed or rejected-by-scope (per the ledger); (b) the remaining blocking items are all NEW `MUST_FIX_NOW` (items classed `REGRESSION_FROM_AUTHORIZED_FIX` do NOT count as new — they are causally tied to a prior accepted fix); (c) none cite DATA_LOSS, SECURITY, or GUARANTEED_FAIL materiality. Escalation summary must include: prior blockers closed; new blockers with their materiality labels; recommendation — approve now plus defer list, OR authorize another high-materiality round.
+4. **Round cap.** The next round would be round 5 (cap=4 exhausted) → escalate: plan-file path + last blocking list + one-sentence disagreement summary (have Opus write the summary). User picks: accept / another round / close.
+5. **None fired** → run the ledger sequence (a)–(d) above and start the next round.
 
 ### Step 3 — implement the current phase
 
@@ -224,14 +264,14 @@ Output: same format (`REVIEW_OK` / `REVIEW_BLOCKING`, numbered list, separate NI
 - Non-empty → run the ledger sequence (see "## Authorized Change Ledger"):
   - **(a) Triage** the combined list. Each finding's class maps to a ledger `decision`. Tag each ledger entry's `reviewer` field as `opus-review` (for 4.1 findings) or `codex-control` (for 4.2 findings). Step 4 uses the SAME ledger file as Step 2 (`docs/plans/<slug>.ledger.json`), but with ids `R<round>-B<n>` derived from the fused-review round counter — independent from Step 2's counter, and ledger entries from prior Step 2 rounds remain in place with their final `status`.
   - **(b) Write/update the ledger** with the triaged items.
-  - **(c) Dispatch Codex high** with `--resume-last --write --effort high`, passing the ledger path (`docs/plans/<slug>.ledger.json`) and the open ACCEPTED / PARTIALLY_ACCEPTED items inline. Increment iteration counter.
-  - Next iteration re-runs 4.1 from scratch (fresh Opus subagent each round — no bias from previous round). The fresh Opus is given the ledger path so it can verify prior-round ACCEPTED items closed cleanly.
+  - **(c) Dispatch Codex high as a FRESH task** (`--write --effort high`, NO `--resume-last`) using the follow-up template in `./implementer-prompt.md` — it re-briefs plan path + phase id and passes the ledger path plus the open ACCEPTED / PARTIALLY_ACCEPTED items inline. `--resume-last` is FORBIDDEN anywhere in the Step 4 loop: it resumes the newest Codex thread in the repo regardless of role, and in this loop that is the control reviewer's read-only thread, not the implementer's (see `codex-invocation` "Resume semantics"). Increment iteration counter.
+  - Next iteration re-runs 4.1 from scratch (fresh Opus subagent each round — no bias from previous round). The fresh Opus is given the ledger path so it can verify prior-round ACCEPTED items closed cleanly. 4.2 round 2+ is likewise a FRESH Codex task with the full control-review prompt (see `./codex-control-review-prompt.md` follow-up section).
 
-Round 4 without both-clean → escalate (have Opus write the summary): diff + combined list + one-sentence description of the impasse. User picks accept / another round / close.
+**Loop-control checks (Step 4)** — run the SAME ordered procedure as Step 2 (anti-pingpong → no-progress → churn → round cap → next round; first match wins) after every non-empty combined BLOCKING list, with these substitutions:
 
-Same anti-pingpong / no-progress guards as Step 2 (apply to each reviewer's own history separately — don't let Opus re-raise what it already rejected, same for Codex xhigh).
-
-**New-blocker churn detector (Step 4)**: same rule as Step 2 — escalate immediately if (a) all blockers from the previous fused round are fixed or rejected-by-scope (per the ledger), AND (b) the COMBINED reviewer output (opus-review + codex-control) raises only NEW `MUST_FIX_NOW` items, AND (c) none cite DATA_LOSS, SECURITY, or GUARANTEED_FAIL materiality. Use the COMBINED / fused list for this check, not each reviewer's history independently — a finding raised by either reviewer counts. `REGRESSION_FROM_AUTHORIZED_FIX` items are excluded from the new-MUST_FIX_NOW count.
+- **Anti-pingpong and no-progress** apply to each reviewer's own history separately — don't let Opus re-raise what it already rejected, same for Codex xhigh.
+- **New-blocker churn detector** uses the COMBINED reviewer output (opus-review + codex-control), not each reviewer's history independently — a finding raised by either reviewer counts. Same three conditions as Step 2; `REGRESSION_FROM_AUTHORIZED_FIX` items are excluded from the new-MUST_FIX_NOW count.
+- **Round cap** escalation content: diff + combined list + one-sentence description of the impasse (have Opus write the summary). User picks accept / another round / close.
 
 ## Auto-commit (after fused review clean)
 
@@ -247,7 +287,7 @@ Stage and commit in one go:
 - The plan file (with frontmatter update).
 - Conventional-commit subject (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`) referencing the phase, in a HEREDOC.
 - 1–2 sentence body focused on **why**.
-- `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>` trailer (adjust to actual main model; Sonnet is default for this orchestrator).
+- `Co-Authored-By: Claude <main-thread model name, e.g. Opus 4.8> <noreply@anthropic.com>` trailer — use the model actually running the main thread, not a hardcoded name.
 
 ### For a Sonnet quickfix (no plan file)
 
@@ -284,6 +324,7 @@ A single user request often produces a plan with multiple phases (Ф1, Ф2, Ф3,
 - Step 1 (plan) and Step 2 (plan review) cover **all phases at once**, up front.
 - Step 3 (implementation) and Step 4 (fused review + auto-commit) run **per phase**.
 - After a phase's auto-commit lands cleanly, **immediately dispatch the next phase's Step 3** — do NOT ask "shall I proceed to Ф2?" / "запускать Codex для Ф2?". The plan was already approved; re-asking is noise.
+- Before dispatching the next phase, check its frontmatter: if it shares a `parallel_group` with another pending phase, run them as a parallel group (see "## Parallel groups") instead of sequentially.
 
 Transition reporting (one line, no question, no choice offered):
 - `Ф1 committed <sha>. Starting Ф2: <one-line scope>.`
@@ -296,6 +337,43 @@ Pause and ask the user ONLY when:
 - The upcoming phase includes **irreversible side-effects** (prod schema migration, external API writes, destructive git ops) — flag before dispatching Codex.
 
 None of these are a routine "confirm?" prompt — they are real blockers.
+
+## Parallel groups (two tracks max)
+
+The plan writer may mark 2 phases as a **parallel group** in the frontmatter (`parallel_group: G1` on both phases — see `writing-plans` / `opus-plan-prompt.md` for the marking rules; canonical case: a BE+FE pair with a frozen contract). When the next pending phases share a `parallel_group`, run them as two concurrent tracks instead of sequentially. If you see 3+ phases in one group, run 2 at a time — the width cap is HARD (subscription rate limits + orchestrator attention).
+
+Routing per track is unchanged: frontend-only phase → Claude frontend implementer subagent (Opus with `ultrathink` for new UI, Sonnet for tweaks); everything else → Codex high. Codex+Codex, Codex+Claude, Claude+Claude are all valid pairs.
+
+**Preconditions (all must hold; else fall back to sequential):**
+1. Both phases `pending`, same `parallel_group`, plan approved by Step 2.
+2. `git status` clean in the main working tree.
+3. No other Codex write task currently running.
+
+**Track lifecycle:**
+
+1. **Setup.** For EACH phase, from the main tree:
+   `git worktree add <repo-parent>/<repo-name>-wt-<phase-id> -b wt/<slug>/<phase-id>` (branches off the current branch). Flip both phases to `status: in-progress` in the plan frontmatter on the main branch, commit `docs(plans): start parallel group <G> (<id>+<id>)`.
+2. **Dispatch both implementers concurrently.**
+   - Codex: standard implementer dispatch plus `--cwd <worktree-path>` (`--prompt-file` as usual). In the prompt, `Repository root:` = the worktree path.
+   - Claude subagent: prompt names the worktree path as the working root and forbids touching anything outside it.
+3. **Poll both.** Codex via Monitor (remember `--cwd <worktree-path>` on every `status`/`result` call); Claude via Agent completion. Handle each track's verdict independently per Step 3 rules.
+4. **Step 4 per track, independently** — same fused review loop, run against the track's worktree: Opus reviewer and Codex control reviewer get the worktree path as repo root (Codex: `--cwd`). Per-track ledger lives INSIDE the worktree at `<worktree>/docs/plans/<slug>.ledger.json` — tracks never share a ledger. All fix-round dispatches carry the track's `--cwd`.
+5. **Commit per track.** When a track's fused review is clean: stage the phase's files by name and commit IN THE WORKTREE (conventional subject, Co-Authored-By trailer, no plan-file edits there).
+6. **Merge (sequential, main tree).** After BOTH tracks committed: `git merge --no-ff wt/<slug>/<id-1>` then `git merge --no-ff wt/<slug>/<id-2>`. A conflict means the plan's independence claim was wrong — abort the merge, escalate to the user with both branch names. Do not resolve conflicts yourself.
+7. **Integration check (dispatched — not run on main).** The tracks were reviewed in isolation; the merged combination was never tested. Dispatch `Agent(subagent_type="general-purpose", model="sonnet")`:
+
+   ```
+   Run the repository's standard verification in <repo-root>: tests, typecheck, linter (whatever the repo provides). Do not modify any files. Report line 1 exactly `INTEGRATION_OK` or `INTEGRATION_FAIL`, then the failing commands and output excerpts.
+   ```
+
+   - `INTEGRATION_FAIL` → dispatch Codex high (fresh, main tree, `--write`) with the failure report + plan path + both phase ids to repair the integration; re-run the check. Cap 2 repair rounds, then escalate.
+8. **Bookkeeping + cleanup.** Flip both phases to `done` (next pending → `in-progress`) in the plan frontmatter, commit `docs(plans): complete parallel group <G>`. Then `git worktree remove <path>` and `git branch -d wt/<slug>/<id>` for both tracks. Report: `Group <G> merged: <sha-1>, <sha-2>. Starting <next>.`
+
+**Failure asymmetry.** If one track passes and the other escalates (cap, BLOCKED): merge the passing track alone (steps 6–8 for it, its phase → `done`), keep the failed track's worktree intact, and escalate with the worktree path. Never delete a worktree with unmerged work.
+
+**Resume.** If resume-check finds TWO `in-progress` phases sharing a `parallel_group`, run `git worktree list`: worktrees exist → offer to continue the group from where each track stopped; missing → offer to restart the group (re-create worktrees, re-dispatch Step 3).
+
+**State line during a group:** append `tracks=<id>:<step>-r<k>,<id>:<step>-r<k>` (e.g. `tracks=Ф2:4-r1,Ф3:3`).
 
 ## Authorized Change Ledger
 
@@ -319,6 +397,42 @@ None of these are a routine "confirm?" prompt — they are real blockers.
 }
 ```
 
+**Worked example** — the whole file is a JSON array of items. `docs/plans/user-auth.ledger.json` after Step 2 round 1 triage (reviewer returned two blockers and one out-of-scope ask):
+
+```json
+[
+  {
+    "id": "R1-B1",
+    "reviewer": "codex-plan",
+    "decision": "ACCEPTED",
+    "authorized_change": "Add a step to Ф2: invalidate the session cookie on password change",
+    "forbidden_expansions": ["do not add a global session-revocation service"],
+    "materiality": "SECURITY",
+    "status": "open"
+  },
+  {
+    "id": "R1-B2",
+    "reviewer": "codex-plan",
+    "decision": "PARTIALLY_ACCEPTED",
+    "authorized_change": "Fix the Ф1/Ф3 signature mismatch for createUser() — align Ф3 to the Ф1 contract; do NOT redesign the contract",
+    "forbidden_expansions": [],
+    "materiality": "BUILD_BREAK",
+    "status": "open"
+  },
+  {
+    "id": "R1-B3",
+    "reviewer": "codex-plan",
+    "decision": "REJECTED_BY_SCOPE",
+    "authorized_change": null,
+    "forbidden_expansions": [],
+    "materiality": "NICE_TO_HAVE",
+    "status": "rejected"
+  }
+]
+```
+
+On the next round you would first update these entries' `status` (e.g. `R1-B1` → `fixed`), then append `R2-B1`, `R2-B2`, … from the new verdict.
+
 **Distribution rule.** Fixers receive only ACCEPTED / PARTIALLY_ACCEPTED open items. Reviewers receive the full ledger.
 
 **Materiality vocabulary (reviewer side).** Reviewers classify each finding using exactly one of: `MUST_FIX_NOW`, `REGRESSION_FROM_AUTHORIZED_FIX`, `DEFER`, `NIT`, `REJECTED_BY_SCOPE`. The orchestrator maps reviewer-class → ledger `decision` when triaging (e.g. `MUST_FIX_NOW` → ACCEPTED or PARTIALLY_ACCEPTED, `REJECTED_BY_SCOPE` → REJECTED_BY_SCOPE, etc.). Only `MUST_FIX_NOW` and `REGRESSION_FROM_AUTHORIZED_FIX` are valid in a reviewer's BLOCKING list; the other three land in DEFER / NIT / REJECTED_BY_SCOPE sections of the CHANGES_REQUESTED output.
@@ -338,11 +452,16 @@ In Phase Ф1 the ledger is documented and produced, but its `materiality` field 
 - **Do research on main** — `Read`/`Grep` on source, running `pytest` / linters / build scripts, reading plan body beyond frontmatter (Rule 2). If you are reasoning towards "but I just need to see what's failing / what the current code looks like / what this error means" — STOP and dispatch Explore.
 - Do architectural judgment (plans, reviews, BLOCKED diagnosis) on main — always dispatch Opus subagent.
 - `Agent(subagent_type="codex:codex-rescue", ...)` or `Bash("codex exec ...")` — both silently auto-reject.
+- `--resume-last` inside the Step 4 loop — it resumes the newest Codex thread regardless of role, i.e. the fixer would continue the control reviewer's read-only conversation (or vice versa). Step 4 rounds 2+ are always fresh, fully re-briefed dispatches.
 - Skip Step 4.1 and go straight to 4.2 — Opus review is always first; Codex xhigh is a control, not primary.
 - Run 4.2 if 4.1 returned BLOCKING — save the dispatch.
 - Accept "close enough" on spec compliance.
 - Loop past cap=4 without escalating.
 - Commit unrelated uncommitted changes along with the task's diff.
+- Run two write-implementers in the SAME working tree, or more than 2 write tasks at once — parallel tracks exist ONLY as separate worktrees, max 2.
+- Parallelize phases the approved plan did not mark with a shared `parallel_group` — sequencing is the plan writer's call, not yours.
+- Resolve merge conflicts between tracks yourself — a conflict falsifies the plan's independence claim; abort and escalate.
+- Delete a worktree with unmerged work.
 - Push, force-push, or skip hooks.
 - Start work on `main`/`master` without user's explicit consent.
 - Let a nit block progress.

@@ -8,14 +8,16 @@ Use when dispatching a plan review to Codex xhigh.
 "$DISPATCH" task \
   --background \
   --effort xhigh \
-  "<prompt below>"
+  --prompt-file <scratch>/plan-review.md
 ```
 
-`$DISPATCH` is the `codex-dispatch` wrapper — resolve it once per session per the `codex-invocation` skill.
+`$DISPATCH` is the `codex-dispatch` wrapper — resolve it once per session per the `codex-invocation` skill. Write the filled prompt to a scratch file first and pass it via `--prompt-file` — do not inline multi-line text.
 
 No `--write`. Review is read-only.
 
-For round 2+, add `--resume-last` and tell Codex the plan file was updated and must be re-read. Do NOT send the full plan text in any round — always point to the file.
+For round 2+, add `--resume-last` and tell Codex the plan file was updated and must be re-read. (`--resume-last` is safe in THIS loop: the revision between rounds is an Opus subagent, so the newest Codex thread is this reviewer's own — see `codex-invocation` "Resume semantics". If stale-lock forces `--fresh`, send the full first-round prompt + ledger digest instead of the follow-up prompt.) Do NOT send the full plan text in any round — always point to the file.
+
+**Filling the `## Context` section**: take repo root from what you already know; take "Relevant files" from the plan's own `## Files` section and the Explore subagent's report; take constraints from the user's request and repo docs you were given. Do NOT research the source tree yourself to fill these — that violates the no-research-on-main rule. If you have nothing for a line, write "none known" rather than guessing.
 
 Poll with Monitor using the terminal-only filter from the `codex-invocation` skill. Fetch result via `"$DISPATCH" result task-XXXX`.
 
@@ -79,6 +81,8 @@ Use exactly one class per finding:
 - an implementation step or test is impossible or guaranteed-failing;
 - material risk that clears the high-materiality bar — any of `DATA_LOSS`, `SECURITY`, `GUARANTEED_FAIL`, `REGRESSION` (of an existing public contract), or direct failure of `ACCEPTANCE_CRITERIA` for this phase.
 
+If the frontmatter marks phases with a shared `parallel_group`, additionally verify: their `## Files` sets are fully disjoint, and neither phase uses anything from the other beyond contracts frozen in `## Contracts`. A violated parallel_group is `MUST_FIX_NOW` (`GUARANTEED_FAIL` — the phases are built concurrently in separate worktrees and merged; overlap or implementation dependency guarantees a broken merge). A group with 3+ phases is also `MUST_FIX_NOW` (orchestrator supports exactly 2).
+
 **Stage B — Design hardening suggestions.** Report as `DEFER` by default. Stage B candidates include:
 
 - extra guards;
@@ -92,7 +96,7 @@ If a Stage B suggestion is promoted to `MUST_FIX_NOW`, cite the exact Stage A cr
 
 ## Output format (strict)
 
-Line 1 must be exactly one of: `APPROVED` or `CHANGES_REQUESTED`.
+Line 1 must be exactly the bare token `APPROVED` or `CHANGES_REQUESTED` — no preamble, no markdown heading, no bold.
 
 If `CHANGES_REQUESTED`, after line 1 emit:
 
