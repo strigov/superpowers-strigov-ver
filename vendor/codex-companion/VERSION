@@ -1,2 +1,2 @@
 v1.0.4 (github.com/openai/codex-plugin-cc, tag v1.0.4, commit 807e03a) — vendored on 2026-04-25
-Local patches on top of v1.0.4: --resume-task <task-id> flag in `task` (thread-addressed resume, codex-companion.mjs); broker orphan cleanup (app-server-broker.mjs); optional authorization fields in review-output.schema.json. Re-apply after any upstream bump.
+Local patches on top of v1.0.4: --resume-task <task-id> flag in `task` (thread-addressed resume, codex-companion.mjs); reasoning efforts extended with max/ultra for GPT-5.6 (VALID_REASONING_EFFORTS, codex-companion.mjs — upstream v1.0.6 still lacks both); broker orphan cleanup (app-server-broker.mjs); optional authorization fields in review-output.schema.json. Re-apply after any upstream bump.

@@ -1,32 +1,32 @@
-# Plan Reviewer Prompt (Codex xhigh)
+# Opus Subagent — Plan Review (Step 2)
 
-Use when dispatching a plan review to Codex xhigh.
+Use when dispatching a plan review to an Opus subagent. The plan was written by the Codex plan writer (Sol max) — the reviewer is deliberately from the other model family. Fresh subagent each round (no bias from previous review rounds).
 
 ## Invocation
 
-```bash
-"$DISPATCH" task \
-  --background \
-  --effort xhigh \
-  --prompt-file <scratch>/plan-review.md
+```
+Agent tool:
+  subagent_type: "general-purpose"
+  model: "opus"
+  description: "Plan review <slug> (round <k>)"
+  prompt: |
+    <prompt below>
 ```
 
-`$DISPATCH` is the `codex-dispatch` wrapper — resolve it once per session per the `codex-invocation` skill. Write the filled prompt to a scratch file first and pass it via `--prompt-file` — do not inline multi-line text.
+**The prompt's literal first line MUST be `ultrathink`** — it runs Opus at max thinking effort. Both templates below already start with it; keep it first.
 
-No `--write`. Review is read-only.
-
-For round 2+, add `--resume-task <task-id of round 1's review>` and tell Codex the plan file was updated and must be re-read (thread-addressed resume — safe regardless of what else ran in between; see `codex-invocation` "Resume semantics". If a stale job record forces `--fresh`, send the full first-round prompt + ledger digest instead of the follow-up prompt.) Do NOT send the full plan text in any round — always point to the file.
+Round 2+ is a FRESH Opus subagent with the follow-up template — it carries the ledger path and the revision report, so no thread memory is needed. Do NOT paste the full plan text in any round — always point to the file.
 
 **Filling the `## Context` section**: take repo root from what you already know; take "Relevant files" from the plan's own `## Files` section and the Explore subagent's report; take constraints from the user's request and repo docs you were given. Do NOT research the source tree yourself to fill these — that violates the no-research-on-main rule. If you have nothing for a line, write "none known" rather than guessing.
-
-Poll with Monitor using the terminal-only filter from the `codex-invocation` skill. Fetch result via `"$DISPATCH" result task-XXXX`.
 
 ## First-round prompt template
 
 ```
+ultrathink
+
 REVIEW MODE — read-only, do not modify code.
 
-You are reviewing an implementation plan for correctness, completeness, and risk.
+You are the plan-review stage of dev-orchestrator: a fresh Opus subagent reviewing an implementation plan written by a Codex (GPT-5.6 Sol) plan writer. Review it skeptically for correctness, completeness, and risk.
 
 ## Plan file (authoritative — read it)
 
@@ -128,12 +128,20 @@ Be ruthless on BLOCKING; be sparing — only include what truly blocks per the F
 Do not write code. Do not modify files. Read the plan and cited files only.
 ```
 
-## Follow-up prompt (round 2+, with `--resume-task <plan-review-task-id>`)
+## Follow-up prompt (round 2+ — FRESH Opus subagent)
+
+Send the FULL first-round prompt (all sections: context, ledger, authorization boundary, finding classes, review stages, output format) with the opening paragraph replaced by the block below and the ledger section filled in:
 
 ```
+ultrathink
+
+REVIEW MODE — read-only, do not modify code.
+
+You are the plan-review stage of dev-orchestrator, round <k>. A prior Opus review of this plan produced blocking findings; the Codex plan writer has since revised the plan per the authorized ledger items. You are a fresh subagent with no memory of prior rounds — the ledger below is the authoritative history.
+
 AUTHORIZED_CHANGE_LEDGER (path): `<repo-root>/docs/plans/<slug>.ledger.json` — read this before re-reviewing. The ledger lists which prior findings the orchestrator accepted (with the authorized change), partially accepted, rejected by scope, deferred, or marked NIT.
 
-The plan file at <repo-root>/docs/plans/<slug>.md has been revised. **Re-read it** — the edits happened since your last review.
+The plan file at <repo-root>/docs/plans/<slug>.md has been revised. **Read the file on disk** — it is the current state.
 
 ## Follow-up review rule
 

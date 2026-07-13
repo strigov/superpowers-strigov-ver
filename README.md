@@ -2,7 +2,7 @@
 
 A Claude Code plugin that replaces the default "Claude does everything" mode with a **structured multi-model development workflow**: Sonnet orchestrates, Opus judges, Codex implements and reviews.
 
-Current repo/plugin version: `0.4.0`.
+Current repo/plugin version: `0.5.0`.
 
 ## The idea
 
@@ -11,9 +11,12 @@ Claude Code's default behavior puts one model in charge of everything — planni
 This plugin replaces that with a division of labor matched to what each model is actually good at:
 
 - **Sonnet** (main thread) — cheap, fast orchestration. Reads output, dispatches next step, polls, does git. Never writes production code.
-- **Opus** (subagent) — judgment. Writes the plan, reviews code, diagnoses blockers. Gets a clean context every invocation.
-- **Codex xhigh** — skeptical read-only review. Plan review before implementation starts; control review after Opus clears the code.
-- **Codex high** — implementation. Writes the actual files.
+- **GPT-5.6 Sol max** (Codex) — plan writing and plan revisions. (`ultra` — Sol's parallel-subagent mode — exists but is used only when the user explicitly asks for it.)
+- **Opus** (subagent, `ultrathink`) — judgment. Reviews the plan, reviews the code (4.1), diagnoses blockers. Gets a clean context every invocation.
+- **GPT-5.6 Luna max** (Codex) — implementation and fix rounds. Cheap, strong agentic coder; **GPT-5.6 Terra xhigh** is the reasoning escalation when Luna gets stuck.
+- **GPT-5.6 Sol xhigh** (Codex) — skeptical read-only control review after Opus clears the code (4.2).
+
+**Family rule**: writer and reviewer of the same artifact are never from the same model family — Sol writes the plan, Opus reviews it; Luna writes the code, Opus reviews it and Sol cross-checks.
 
 The result: a plan exists before a line of code is written, two independent reviewers sign off before anything commits, and the whole session is resumable across days.
 
@@ -34,17 +37,18 @@ Single-file change, <20 lines, no architectural judgment?
 ### Full protocol (5 steps)
 
 ```
-Step 1  Opus subagent writes a plan
+Step 1  Codex Sol max writes a plan  (--write)
         └─ docs/plans/YYYY-MM-DD-<slug>.md
            YAML frontmatter: phases, statuses
            Sections: Goal · Files · Contracts · Test strategy · Risks · Phases
 
-Step 2  Codex xhigh reviews the plan  (loop, cap=4)
+Step 2  Opus reviews the plan  (loop, cap=4; fresh subagent each round)
         └─ APPROVED → commit plan, go to Step 3
-           CHANGES_REQUESTED → Opus revises in place → Codex re-reviews
+           CHANGES_REQUESTED → Sol revises its own thread (--resume-task) → fresh Opus re-review
            4 rounds without approval → escalate to user
 
-Step 3  Codex high implements current phase  (--write --effort high)
+Step 3  Codex Luna max implements current phase  (--write)
+        (BLOCKED + "needs more reasoning" → resume the thread at Terra xhigh)
         └─ DONE → Step 3.5
            DONE_WITH_CONCERNS → Sonnet reads concerns, decides
            NEEDS_CONTEXT → provide context, resume implementer thread (--resume-task)
@@ -58,8 +62,8 @@ Step 3.5  Verification gate  (Sonnet subagent; re-runs after every fix round)
 Step 4  Fused review  (loop, cap=4)
         ├─ 4.1  Opus reviews: spec compliance first, then quality
         │        REVIEW_OK → trigger 4.2
-        │        REVIEW_BLOCKING → back to Codex high with fix list
-        └─ 4.2  Codex xhigh control review (only if 4.1 passed)
+        │        REVIEW_BLOCKING → back to the fixer with fix list
+        └─ 4.2  Codex Sol xhigh control review (only if 4.1 passed)
                  Orthogonal angle: edge cases, races, security, plan-vs-code gaps
                  BOTH CLEAN → Step 4.5 → auto-commit, advance to next phase
                  BLOCKING → fixer resumes its own thread (--resume-task) with combined list
@@ -76,7 +80,7 @@ Step 5  Auto-commit
            Never git push without explicit user approval
 ```
 
-All Codex resumes are **thread-addressed** (`--resume-task <task-id>`, a local extension of the vendored companion): each role — plan reviewer, implementer — continues exactly its own thread, no matter what ran in between. The Step 4 control review stays fresh each round by design: an independent second opinion must not anchor on its own prior rounds.
+All Codex resumes are **thread-addressed** (`--resume-task <task-id>`, a local extension of the vendored companion): each role — plan writer, implementer — continues exactly its own thread, no matter what ran in between. Claude-side reviews (plan review, 4.1) and the Step 4 control review are fresh each round by design: an independent reviewer must not anchor on its own prior rounds.
 
 ### Multi-phase plans
 
@@ -158,9 +162,9 @@ The Codex companion runtime (originally part of OpenAI's `codex-plugin-cc`) is v
 All Codex calls go through the wrapper `bin/codex-dispatch`, which:
 - resolves `vendor/codex-companion/scripts/codex-companion.mjs` from either the marketplace install path (`~/.claude/plugins/cache/strigov-cc-plugins/superpowers-strigov-ver/<version>/...`) or the local dev tree;
 - pins `CLAUDE_PLUGIN_DATA` to `~/.claude/plugins/data/superpowers-strigov-ver-codex` so jobs and broker state stay isolated from any other codex install on the same machine;
-- for `task`/`review`/`adversarial-review`, auto-injects `--model gpt-5.5` (overridable via `CODEX_DEFAULT_MODEL` env or by passing an explicit `--model` flag) so the backend can't auto-downgrade to spark on small/low-effort calls.
+- for `task`/`review`/`adversarial-review`, auto-injects `--model gpt-5.6-sol` (overridable via `CODEX_DEFAULT_MODEL` env or by passing an explicit `--model` flag) so the backend can't auto-downgrade to spark on small/low-effort calls; protocol dispatches pass explicit per-role models (Sol plan/review, Luna implementation, Terra escalation).
 
-The vendored companion carries local patches on top of the upstream release (listed in `vendor/codex-companion/VERSION`), most notably `task --resume-task <task-id>` — thread-addressed resume that continues exactly the referenced task's Codex thread regardless of what ran in between. This is what lets each protocol role keep its own persistent thread (idea borrowed from TRIP-workflow's per-target thread files). Re-apply the patches when bumping the vendored runtime.
+The vendored companion carries local patches on top of the upstream release (listed in `vendor/codex-companion/VERSION`), most notably `task --resume-task <task-id>` — thread-addressed resume that continues exactly the referenced task's Codex thread regardless of what ran in between — and the `max` / `ultra` reasoning efforts for GPT-5.6 (upstream v1.0.6 still caps at `xhigh`). This is what lets each protocol role keep its own persistent thread (idea borrowed from TRIP-workflow's per-target thread files). Re-apply the patches when bumping the vendored runtime.
 
 You no longer need OpenAI's `codex-plugin-cc` installed in Claude Code. To bump the vendored runtime, copy the contents of `plugins/codex/{scripts,prompts,schemas}` and the top-level `LICENSE`/`NOTICE` from a newer `openai/codex-plugin-cc` release tag into `vendor/codex-companion/` and update `VERSION`.
 
