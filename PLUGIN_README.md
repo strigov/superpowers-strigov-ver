@@ -1,13 +1,13 @@
 # superpowers-strigov-ver
 
 Personal Claude Code plugin assembled from:
-Current repo/plugin version: `0.5.0`.
+Current repo/plugin version: `0.5.1`.
 
 - **`dev-orchestrator`** — multi-model subagent-driven workflow (GPT-5.6 Sol max plan + Opus plan-review loop + GPT-5.6 Luna max implement with Terra xhigh escalation + Sonnet verification gate + Opus code review + Sol xhigh control review + review synthesis, auto-commit, loop cap=4 with anti-pingpong / no-progress guards; thread-addressed Codex resume via `--resume-task`; `ultra` effort strictly user-initiated).
 - **`codex-invocation`** — reference recipe for calling Codex via the `bin/codex-dispatch` wrapper around the vendored `codex-companion.mjs` (background mode + Monitor polling; bypasses the silent auto-reject on standard Agent/`codex exec` paths and pins the default model to `gpt-5.6-sol` to block backend auto-downgrade to spark; per-role GPT-5.6 routing table included).
 - **`codex-ask`** — grounded advisory second opinion from Codex on any question (read-only, threaded per topic, nothing gated on the answer). Adapted from TRIP-workflow.
 - **`architecture-memory`** — maintain `docs/ARCHI.md`, a persistent tool-agnostic architecture memory with token budget, update discipline, and compaction script. Adapted from TRIP-workflow.
-- 12 upstream skills copied from `superpowers` (Jesse Vincent / obra), namespace-stripped: `brainstorming`, `dispatching-parallel-agents`, `executing-plans`, `finishing-a-development-branch`, `receiving-code-review`, `requesting-code-review`, `systematic-debugging`, `test-driven-development`, `using-git-worktrees`, `verification-before-completion`, `writing-plans`, `writing-skills`. `brainstorming` and `writing-plans` extended to delegate spec/plan writing to Opus and spec/plan review to Codex xhigh (loop cap=4).
+- 12 upstream skills copied from `superpowers` (Jesse Vincent / obra), namespace-stripped: `brainstorming`, `dispatching-parallel-agents`, `executing-plans`, `finishing-a-development-branch`, `receiving-code-review`, `requesting-code-review`, `systematic-debugging`, `test-driven-development`, `using-git-worktrees`, `verification-before-completion`, `writing-plans`, `writing-skills`. `brainstorming` extended to delegate spec writing to Opus and spec review to Codex Sol xhigh; `writing-plans` delegates plan writing to Codex Sol max and plan review to Opus (loop cap=4) — the same writer/reviewer pair as dev-orchestrator Steps 1–2.
 - `/dev` slash command — explicit entry point for `dev-orchestrator`.
 
 **Code review** is dispatched as an Opus subagent via `Agent(subagent_type="general-purpose", model="opus", ...)` — see `skills/requesting-code-review/`. The standalone `code-reviewer` agent type from upstream was removed; use the skill instead.

@@ -63,9 +63,9 @@ A JSON snapshot (workspaceRoot, sessionRuntime, running, recent) means the wrapp
 
 | Role | Flags |
 |---|---|
-| Plan writing / revision (Step 1 / 2) | `--model gpt-5.6-sol --effort max --write` |
+| Plan writing / revision (dev-orchestrator Step 1 / 2, writing-plans) | `--model gpt-5.6-sol --effort max --write` |
 | Control review (Step 4.2) | `--model gpt-5.6-sol --effort xhigh` |
-| Spec review (brainstorming) / standalone plan review (writing-plans) | `--model gpt-5.6-sol --effort xhigh` |
+| Spec review (brainstorming) | `--model gpt-5.6-sol --effort xhigh` |
 | Implementation + fix rounds (Step 3 / 4) | `--model gpt-5.6-luna --effort max --write` |
 | Reasoning escalation on BLOCKED | `--model gpt-5.6-terra --effort xhigh` (resume the implementer thread) |
 | codex-ask / ad-hoc consultation | wrapper default (`gpt-5.6-sol`), `--effort xhigh` |
