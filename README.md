@@ -2,7 +2,7 @@
 
 A Claude Code plugin that replaces the default "Claude does everything" mode with a **structured multi-model development workflow**: Sonnet orchestrates, Opus judges, Codex implements and reviews.
 
-Current repo/plugin version: `0.5.0`.
+Current repo/plugin version: `0.5.1`.
 
 ## The idea
 
@@ -127,7 +127,7 @@ Beyond those, `dev-orchestrator`, and `codex-invocation`, the plugin bundles 12 
 | `test-driven-development` | TDD cycle adapted for Claude Code; anti-patterns reference |
 | `using-git-worktrees` | Safe parallel work via git worktrees |
 | `verification-before-completion` | Checklist before declaring any task done |
-| `writing-plans` | How to write a good implementation plan |
+| `writing-plans` | Standalone plan production — same Sol-max-writes / Opus-reviews pair as the orchestrator |
 | `writing-skills` | How to author Claude Code skills; Anthropic best practices |
 
 **Code review** is dispatched as an Opus subagent via `Agent(subagent_type="general-purpose", model="opus", ...)` — see `skills/requesting-code-review/`. The standalone `code-reviewer` agent type from upstream was removed; use the skill instead.
