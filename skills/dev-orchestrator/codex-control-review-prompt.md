@@ -7,6 +7,7 @@ Use AFTER Opus review (Step 4.1) returned `REVIEW_OK`. This is a second-opinion 
 ```bash
 "$DISPATCH" task \
   --background \
+  --model gpt-5.6-sol \
   --effort xhigh \
   [--cwd <worktree-path>] \
   --prompt-file <scratch>/control-review.md

@@ -1,6 +1,6 @@
 # Opus Subagent — Code Review (Step 4.1)
 
-Use when Sonnet orchestrator needs Opus to review Codex high's implementation of a phase. Fresh subagent each round (no bias from previous review rounds).
+Use when Sonnet orchestrator needs Opus to review the implementer's (Codex Luna) work on a phase. Fresh subagent each round (no bias from previous review rounds).
 
 ## Invocation
 

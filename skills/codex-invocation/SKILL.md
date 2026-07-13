@@ -10,7 +10,7 @@ The plugin vendors the Codex companion runtime under `vendor/codex-companion/` a
 The wrapper handles three things on every call:
 1. Resolves the bundled `codex-companion.mjs` from the marketplace cache or the local dev tree.
 2. Pins `CLAUDE_PLUGIN_DATA` to `~/.claude/plugins/data/superpowers-strigov-ver-codex` so jobs/broker state stays isolated from any other codex install on the machine.
-3. For `task`/`review`/`adversarial-review`, injects `--model gpt-5.5` (overridable via `CODEX_DEFAULT_MODEL` env or by passing an explicit `--model` flag). This blocks the backend from auto-downgrading to spark on small or low-effort tasks.
+3. For `task`/`review`/`adversarial-review`, injects `--model gpt-5.6-sol` (overridable via `CODEX_DEFAULT_MODEL` env or by passing an explicit `--model` flag). This blocks the backend from auto-downgrading to spark on small or low-effort tasks. Protocol dispatches always pass an explicit `--model` per role (see the role table below); the pin only backs up ad-hoc calls like `codex-ask`.
 
 On this Mac in Claude Code terminal mode, the standard Codex invocation paths silently auto-reject. Use this wrapper with background tasks and Monitor polling.
 
@@ -53,10 +53,24 @@ A JSON snapshot (workspaceRoot, sessionRuntime, running, recent) means the wrapp
 "$DISPATCH" task \
   --background \
   [--write] \
-  [--effort <low|medium|high|xhigh>] \
+  [--model gpt-5.6-<sol|terra|luna>] \
+  [--effort <low|medium|high|xhigh|max|ultra>] \
   [--resume-task task-XXXX | --resume-last | --fresh] \
   "<prompt>"
 ```
+
+**Role table (GPT-5.6 routing).** Every dev-orchestrator dispatch passes `--model` + `--effort` explicitly:
+
+| Role | Flags |
+|---|---|
+| Plan writing / revision (Step 1 / 2) | `--model gpt-5.6-sol --effort max --write` |
+| Control review (Step 4.2) | `--model gpt-5.6-sol --effort xhigh` |
+| Spec review (brainstorming) / standalone plan review (writing-plans) | `--model gpt-5.6-sol --effort xhigh` |
+| Implementation + fix rounds (Step 3 / 4) | `--model gpt-5.6-luna --effort max --write` |
+| Reasoning escalation on BLOCKED | `--model gpt-5.6-terra --effort xhigh` (resume the implementer thread) |
+| codex-ask / ad-hoc consultation | wrapper default (`gpt-5.6-sol`), `--effort xhigh` |
+
+**`--effort ultra` is user-initiated ONLY.** Ultra is Sol's parallel-subagent mode (~4× tokens). Never offer it, suggest it, or fall back to it on your own — use it exclusively when the user explicitly said "ultra" in their own words. Note: ultra may be rejected on some Codex plans/transport paths; if the dispatch errors on effort, report that to the user rather than silently downgrading.
 
 Expected output: `Codex Task started in the background as task-XXXX`.
 
@@ -68,8 +82,8 @@ Expected output: `Codex Task started in the background as task-XXXX`.
 
 **Flag sanity before submitting** (re-check every dispatch):
 - `--background` — always;
-- `--write` — ONLY when the task must modify files (implementation); never on reviews;
-- effort per role: plan / spec / control review = `xhigh`, implementation = `high`;
+- `--write` — ONLY when the task must modify files (plan writing, implementation); never on reviews;
+- `--model` + `--effort` match the role table above (plan writer = sol/max; reviews = sol/xhigh; implementation = luna/max; escalation = terra/xhigh); no `ultra` unless the user explicitly asked;
 - `--resume-task task-XXXX` — the standard way to continue a prior Codex conversation: resumes the thread of exactly that task id, regardless of what ran in between (see "Resume semantics" below). Track the task id of each role's last dispatch and resume by it;
 - `--resume-last` — legacy positional resume ("newest thread in this repo"); only safe when no other Codex task ran in between. Prefer `--resume-task` everywhere; first round of a new loop goes without either.
 
@@ -102,9 +116,9 @@ Relay Codex's report to the next step verbatim (or summarize into the next promp
 ## Flag reference
 
 - `--background` — return immediately with task id. **Mandatory.**
-- `--write` — Codex may modify files. Omit for review-only runs (default is read-only).
-- `--effort <low|medium|high|xhigh>` — reasoning effort. In dev-orchestrator: plan review = `xhigh`, implementation = `high`. Nothing lower.
-- `--model <name>` — override the default model. The wrapper auto-pins `gpt-5.5` if you don't pass this; pass an explicit `--model` only to override. Override the wrapper default globally with `CODEX_DEFAULT_MODEL=...` in the env.
+- `--write` — Codex may modify files (plan writer, implementer). Omit for review-only runs (default is read-only).
+- `--effort <low|medium|high|xhigh|max|ultra>` — reasoning effort (max/ultra are a local companion patch; upstream stops at xhigh). In dev-orchestrator: plan writing / implementation = `max`, reviews / escalation = `xhigh`. Nothing lower. `ultra` only on explicit user request.
+- `--model <name>` — the role's model (see role table above). The wrapper auto-pins `gpt-5.6-sol` if you don't pass this. Override the wrapper default globally with `CODEX_DEFAULT_MODEL=...` in the env.
 - `--resume-task <task-id>` — continue the Codex conversation of exactly that prior task. Thread-addressed: immune to whatever ran in between. **Preferred resume mechanism.**
 - `--resume-last` — continue the newest task thread in this repo. Legacy; safe only when no other Codex task ran in between. Prefer `--resume-task`.
 - `--fresh` — force new session. Use when a stale job record prevents resume (see below).
@@ -138,7 +152,7 @@ Each `--background` task is its own detached OS process — there is no serial q
 - **Dispatching into a worktree**: pass `--cwd <worktree-path>` (no `cd` needed):
 
   ```bash
-  "$DISPATCH" task --background --write --effort high --cwd <worktree-path> --prompt-file <scratch>/prompt.md
+  "$DISPATCH" task --background --write --model gpt-5.6-luna --effort max --cwd <worktree-path> --prompt-file <scratch>/prompt.md
   ```
 
   The companion resolves the workspace from `--cwd` (`git rev-parse --show-toplevel`), so each worktree gets its OWN state directory, broker, job list, and thread history — fully isolated tracks.

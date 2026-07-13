@@ -1,6 +1,6 @@
-# Implementer Prompt (Codex high)
+# Implementer Prompt (Codex Luna max)
 
-Use when dispatching implementation to Codex high.
+Use when dispatching implementation to the Codex implementer (Luna max). Reasoning escalation for BLOCKED phases goes to Terra xhigh on the same thread.
 
 ## Invocation
 
@@ -8,7 +8,8 @@ Use when dispatching implementation to Codex high.
 "$DISPATCH" task \
   --background \
   --write \
-  --effort high \
+  --model gpt-5.6-luna \
+  --effort max \
   [--cwd <worktree-path>] \
   --prompt-file <scratch>/implement-<phase-id>.md
 ```
@@ -102,7 +103,7 @@ Do NOT silently produce work you're unsure about — use `DONE_WITH_CONCERNS`.
 ## Fix-round prompt (round 2+ — `--resume-task <implementer-task-id>`)
 
 ```
-You are in the fix round of a review loop, continuing the thread in which you implemented this phase. The fused review (Opus + Codex xhigh control) found blocking issues in your diff. Fix ONLY the AUTHORIZED_BLOCKERS below, re-test, re-report.
+You are in the fix round of a review loop, continuing the thread in which you implemented this phase. The fused review (Opus + Sol control) found blocking issues in your diff. Fix ONLY the AUTHORIZED_BLOCKERS below, re-test, re-report.
 
 Re-inspect your current diff first — `git diff <base-sha>` — the tree may have moved since your last turn.
 
@@ -161,7 +162,7 @@ Re-run tests after fixes. Every change in the diff must trace back either to an 
 **Fresh fallback re-brief block** — when the fix round cannot resume the implementer thread (Claude-implemented phase, lost task id, stale job record), replace the opening paragraph above with:
 
 ```
-You are in the fix round of a review loop. A previous run implemented one phase of an approved plan; the fused review (Opus + Codex xhigh control) found blocking issues. You are a fresh session with no memory of that run — re-read the context below, then fix ONLY the AUTHORIZED_BLOCKERS, re-test, re-report.
+You are in the fix round of a review loop. A previous run implemented one phase of an approved plan; the fused review (Opus + Sol control) found blocking issues. You are a fresh session with no memory of that run — re-read the context below, then fix ONLY the AUTHORIZED_BLOCKERS, re-test, re-report.
 
 ## Plan + phase (authoritative — read it)
 

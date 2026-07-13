@@ -48,9 +48,9 @@ Agent(subagent_type="general-purpose", model="opus", description="Plan: <slug>",
 
 Read the plan file's first 30 lines and check: file starts with `---`; frontmatter has `slug`, `created`, `status: in-progress`, and a `phases:` list; first phase `status: in-progress`, all others `status: pending`; every `phases[].id` matches a `## <id>:` H2 in the body (check via `grep -n '^## Ф' <plan-file>`); if any `parallel_group` is present, each group id appears on exactly 2 phases. If a check fails: frontmatter-only defects you may fix mechanically yourself; body defects → re-dispatch Opus naming the specific defect. Do not send a malformed plan to Codex review.
 
-This skill produces plans in the YAML-frontmatter + phases format consumed natively by `dev-orchestrator`. The TDD discipline (failing test → minimal impl → passing test → commit) lives **inside** each phase as the step pattern — phases are the orchestration unit, TDD steps are the work pattern. The canonical format definition lives in `../dev-orchestrator/opus-plan-prompt.md` Mode A — keep this skill's format guidance below in sync with it.
+This skill produces plans in the YAML-frontmatter + phases format consumed natively by `dev-orchestrator`. The TDD discipline (failing test → minimal impl → passing test → commit) lives **inside** each phase as the step pattern — phases are the orchestration unit, TDD steps are the work pattern. The canonical format definition lives in `../dev-orchestrator/codex-plan-writer-prompt.md` Mode A — keep this skill's format guidance below in sync with it.
 
-**Codex xhigh** reviews the plan after Opus writes it. Reuse the template at `../dev-orchestrator/plan-reviewer-prompt.md` for the invocation — the review categories (missing pieces, wrong approach, broken contracts, test gaps, risk, over-engineering) apply equally to this format. Dispatched via `companion.mjs --background` per `codex-invocation` skill. Loop cap=4.
+**Codex Sol xhigh** (`--model gpt-5.6-sol --effort xhigh`, read-only) reviews the plan after Opus writes it — writer and reviewer stay in different model families. Reuse the prompt template BODY from `../dev-orchestrator/opus-plan-reviewer-prompt.md` (drop the `ultrathink` first line — that is an Opus-dispatch artifact); the review stages, finding classes, and output format apply unchanged. Dispatched via `codex-dispatch --background` per the `codex-invocation` skill. Loop cap=4. Record the review task id — re-reviews resume it.
 
 Verdict handling (identical to dev-orchestrator Step 2):
 
@@ -137,7 +137,7 @@ After the YAML frontmatter and the `# [Feature Name] Implementation Plan` title,
 5. `## Risks / unknowns / assumptions` — named explicitly. Anything you are guessing at.
 6. `## Phases` — per phase an H2 `## Ф1: <title>`, `## Ф2: <title>`, ... with the detailed TDD steps inside each (see "## Phase Structure" below).
 
-This mirrors `dev-orchestrator/opus-plan-prompt.md` Mode A — the two files are the joint authority for the format. Keep them aligned when either changes.
+This mirrors `dev-orchestrator/codex-plan-writer-prompt.md` Mode A — the two files are the joint authority for the format. Keep them aligned when either changes.
 
 Self-Review (see below) is a check Opus runs in-process while writing — it is NOT a section in the committed plan file.
 

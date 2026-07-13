@@ -1,30 +1,36 @@
-# Opus Subagent — Plan Writing / Revision
+# Codex Plan Writer Prompt (Sol max) — Plan Writing / Revision
 
-Use when the Sonnet orchestrator needs Opus judgment to write a new plan (Step 1) or revise an existing plan (Step 2 CHANGES_REQUESTED).
+Use when the orchestrator needs a plan written (Step 1) or revised after plan review (Step 2 CHANGES_REQUESTED).
 
 ## Invocation
 
-```
-Agent tool:
-  subagent_type: "general-purpose"
-  model: "opus"
-  description: "Plan: <short-slug>"   # or "Plan revision: <slug>"
-  prompt: |
-    <prompt below>
+```bash
+"$DISPATCH" task \
+  --background \
+  --write \
+  --model gpt-5.6-sol \
+  --effort max \
+  --prompt-file <scratch>/plan-<slug>.md
 ```
 
-The subagent has NO session context. The prompt must be fully self-contained — include user's original request, repo path, any conventions or constraints you know, and the previous plan (if revising).
+`$DISPATCH` is the `codex-dispatch` wrapper — resolve it once per session per the `codex-invocation` skill. Write the filled prompt to a scratch file first and pass it via `--prompt-file`. `--write` is required — the plan writer creates the plan file itself. Record the task id: revisions resume this thread.
 
-**The prompt's literal first line MUST be `ultrathink`** — it runs Opus at max thinking effort. Both templates below already start with it; keep it first when filling them in.
+**Effort is `max`, never `ultra`, unless the user EXPLICITLY asked for ultra in their own words.** Do not propose ultra yourself — not as a question, not as a recommendation. (Ultra is Sol's parallel-subagent mode: 4× the tokens; the user opts in when they want it.)
+
+For revisions (Mode B) dispatch with `--resume-task <plan-writer-task-id>` — same flags otherwise; the thread already holds the request, the repo context, and the plan it wrote.
+
+Poll with Monitor using the terminal-only filter from `codex-invocation`. Fetch via `"$DISPATCH" result task-XXXX`.
+
+The task has NO session context beyond its own thread. The Mode A prompt must be fully self-contained — include user's original request, repo path, any conventions or constraints you know.
 
 ---
 
 ## Mode A: Write a new plan (Step 1)
 
 ```
-ultrathink
+You are writing an implementation plan for a multi-phase feature. This is dispatched by dev-orchestrator; the orchestrator (Sonnet main thread) will then send your plan to an Opus reviewer.
 
-You are writing an implementation plan for a multi-phase feature. This is dispatched by dev-orchestrator; the orchestrator (Sonnet main thread) will then send your plan to Codex xhigh for review.
+You may read anything in the repository, but write ONLY the plan file specified below. Do not modify source code, tests, or any other file. Do NOT run `git commit` / `git push` — the orchestrator handles git.
 
 ## User's original request (verbatim)
 
@@ -119,20 +125,18 @@ That's it. Do NOT commit — the orchestrator handles git.
 
 ---
 
-## Mode B: Revise a plan (Step 2 CHANGES_REQUESTED)
+## Mode B: Revise a plan (Step 2 CHANGES_REQUESTED — `--resume-task <plan-writer-task-id>`)
 
-The orchestrator dispatches Mode B after Codex xhigh returned `CHANGES_REQUESTED` and the orchestrator has triaged the findings into the AUTHORIZED_CHANGE_LEDGER (see `dev-orchestrator/SKILL.md` "## Authorized Change Ledger"). The ledger is the single authoritative input for this dispatch — work only on its open ACCEPTED / PARTIALLY_ACCEPTED items.
+The orchestrator dispatches Mode B after the Opus plan reviewer returned `CHANGES_REQUESTED` and the orchestrator has triaged the findings into the AUTHORIZED_CHANGE_LEDGER (see `dev-orchestrator/SKILL.md` "## Authorized Change Ledger"). The ledger is the single authoritative input for this dispatch — work only on its open ACCEPTED / PARTIALLY_ACCEPTED items.
 
 ```
-ultrathink
-
-You are revising an implementation plan based on reviewer feedback. Do not rewrite from scratch — apply only the changes the orchestrator has authorized via the ledger below.
+You are revising the implementation plan you wrote earlier in this thread, based on reviewer feedback. Do not rewrite from scratch — apply only the changes the orchestrator has authorized via the ledger below.
 
 ## Plan file to revise
 
 `<absolute path>`
 
-Read it in full (including frontmatter) before editing.
+Re-read it in full (including frontmatter) before editing — the file on disk is authoritative, not your memory of it.
 
 ## AUTHORIZED_CHANGE_LEDGER
 
