@@ -77,7 +77,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
       "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--resume-task <task-id>|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]"
@@ -455,17 +455,33 @@ async function executeReviewRun(request) {
 }
 
 
+function resolveStoredJobThread(workspaceRoot, jobReference) {
+  const storedJob = readStoredJob(workspaceRoot, jobReference);
+  if (!storedJob) {
+    throw new Error(`No stored job found for ${jobReference} in this workspace.`);
+  }
+  if (isActiveJobStatus(storedJob.status)) {
+    throw new Error(`Job ${jobReference} is still ${storedJob.status}; wait for it to finish before resuming its thread.`);
+  }
+  if (!storedJob.threadId) {
+    throw new Error(`Job ${jobReference} has no recorded Codex thread to resume (it may have failed before the thread started).`);
+  }
+  return storedJob.threadId;
+}
+
 async function executeTaskRun(request) {
   const workspaceRoot = resolveWorkspaceRoot(request.cwd);
   ensureCodexAvailable(request.cwd);
 
   const taskMetadata = buildTaskRunMetadata({
     prompt: request.prompt,
-    resumeLast: request.resumeLast
+    resumeLast: request.resumeLast || Boolean(request.resumeTaskId)
   });
 
   let resumeThreadId = null;
-  if (request.resumeLast) {
+  if (request.resumeTaskId) {
+    resumeThreadId = resolveStoredJobThread(workspaceRoot, request.resumeTaskId);
+  } else if (request.resumeLast) {
     const latestThread = await resolveLatestTrackedTaskThread(workspaceRoot, {
       excludeJobId: request.jobId
     });
@@ -476,7 +492,7 @@ async function executeTaskRun(request) {
   }
 
   if (!request.prompt && !resumeThreadId) {
-    throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
+    throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last / --resume-task.");
   }
 
   const result = await runAppServerTurn(workspaceRoot, {
@@ -598,7 +614,7 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
+function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, resumeTaskId, jobId }) {
   return {
     cwd,
     model,
@@ -606,6 +622,7 @@ function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId
     prompt,
     write,
     resumeLast,
+    resumeTaskId,
     jobId
   };
 }
@@ -619,9 +636,9 @@ function readTaskPrompt(cwd, options, positionals) {
   return positionalPrompt || readStdinIfPiped();
 }
 
-function requireTaskRequest(prompt, resumeLast) {
-  if (!prompt && !resumeLast) {
-    throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
+function requireTaskRequest(prompt, resume) {
+  if (!prompt && !resume) {
+    throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last / --resume-task.");
   }
 }
 
@@ -731,7 +748,7 @@ async function handleReview(argv) {
 
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file"],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "resume-task"],
     booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
     aliasMap: {
       m: "model"
@@ -745,19 +762,29 @@ async function handleTask(argv) {
   const prompt = readTaskPrompt(cwd, options, positionals);
 
   const resumeLast = Boolean(options["resume-last"] || options.resume);
+  const resumeTaskId = typeof options["resume-task"] === "string" && options["resume-task"].trim()
+    ? options["resume-task"].trim()
+    : null;
   const fresh = Boolean(options.fresh);
-  if (resumeLast && fresh) {
-    throw new Error("Choose either --resume/--resume-last or --fresh.");
+  if ((resumeLast || resumeTaskId) && fresh) {
+    throw new Error("Choose either --resume/--resume-last/--resume-task or --fresh.");
+  }
+  if (resumeLast && resumeTaskId) {
+    throw new Error("Choose either --resume/--resume-last or --resume-task, not both.");
+  }
+  if (resumeTaskId) {
+    // Fail fast on a bad reference before queueing background work.
+    resolveStoredJobThread(workspaceRoot, resumeTaskId);
   }
   const write = Boolean(options.write);
   const taskMetadata = buildTaskRunMetadata({
     prompt,
-    resumeLast
+    resumeLast: resumeLast || Boolean(resumeTaskId)
   });
 
   if (options.background) {
     ensureCodexAvailable(cwd);
-    requireTaskRequest(prompt, resumeLast);
+    requireTaskRequest(prompt, resumeLast || resumeTaskId);
 
     const job = buildTaskJob(workspaceRoot, taskMetadata, write);
     const request = buildTaskRequest({
@@ -767,6 +794,7 @@ async function handleTask(argv) {
       prompt,
       write,
       resumeLast,
+      resumeTaskId,
       jobId: job.id
     });
     const { payload } = enqueueBackgroundTask(cwd, job, request);
@@ -785,6 +813,7 @@ async function handleTask(argv) {
         prompt,
         write,
         resumeLast,
+        resumeTaskId,
         jobId: job.id,
         onProgress: progress
       }),

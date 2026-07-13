@@ -15,7 +15,7 @@ Use when dispatching a design spec review to Codex xhigh after Opus writes the s
 
 No `--write`. Review is read-only.
 
-For round 2+, add `--resume-last` and tell Codex the spec file was updated and must be re-read. (`--resume-last` is safe in THIS loop: the revision between rounds is an Opus subagent, so the newest Codex thread is this reviewer's own. If stale-lock forces `--fresh`, send the full first-round prompt + a digest of prior rounds instead of the follow-up prompt.) Do NOT send the full spec text — always point to the file.
+For round 2+, add `--resume-task <task-id of round 1's review>` and tell Codex the spec file was updated and must be re-read (thread-addressed resume — see `codex-invocation` "Resume semantics". If a stale job record forces `--fresh`, send the full first-round prompt + a digest of prior rounds instead of the follow-up prompt.) Do NOT send the full spec text — always point to the file.
 
 Poll with Monitor using the terminal-only filter from the `codex-invocation` skill. Fetch result via `"$DISPATCH" result task-XXXX`.
 
@@ -82,7 +82,7 @@ Be ruthless on BLOCKING; be sparing — only include what truly blocks implement
 Do not write code. Do not modify files. Read the spec and referenced files only.
 ```
 
-## Follow-up prompt (round 2+, with `--resume-last`)
+## Follow-up prompt (round 2+, with `--resume-task <spec-review-task-id>`)
 
 ```
 The spec file at <absolute path> has been revised. **Re-read it** — the edits happened since your last review. Same review rules, same output format.

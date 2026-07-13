@@ -38,6 +38,8 @@ You are writing an implementation plan for a multi-phase feature. This is dispat
 - Files / modules known to be relevant: <list if any>
 - Constraints: <e.g., "cannot touch public API of module Y", "performance budget X ms", "no new external deps">
 
+If `docs/ARCHI.md` exists in the repo, read it FIRST — it is the maintained architecture memory (see the `architecture-memory` skill) and replaces most from-scratch exploration. Trust it for orientation, verify against source anything your plan depends on. If your plan will change something ARCHI.md describes (modules, contracts, data flow), add an explicit final step to the affected phase: "update docs/ARCHI.md section <X> accordingly".
+
 ## Plan path
 
 Default: `docs/plans/YYYY-MM-DD-<slug>.md` (today's date). If the repo uses a non-standard plan path (check `docs/architecture/plans/`, `docs/rfc/`, `.claude/plans/`, `plans/`), use that. Create the directory if missing.

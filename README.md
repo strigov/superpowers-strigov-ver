@@ -2,7 +2,7 @@
 
 A Claude Code plugin that replaces the default "Claude does everything" mode with a **structured multi-model development workflow**: Sonnet orchestrates, Opus judges, Codex implements and reviews.
 
-Current repo/plugin version: `0.3.4`.
+Current repo/plugin version: `0.4.0`.
 
 ## The idea
 
@@ -45,10 +45,15 @@ Step 2  Codex xhigh reviews the plan  (loop, cap=4)
            4 rounds without approval → escalate to user
 
 Step 3  Codex high implements current phase  (--write --effort high)
-        └─ DONE → Step 4
+        └─ DONE → Step 3.5
            DONE_WITH_CONCERNS → Sonnet reads concerns, decides
-           NEEDS_CONTEXT → provide context, re-dispatch
+           NEEDS_CONTEXT → provide context, resume implementer thread (--resume-task)
            BLOCKED → Opus diagnoses → escalate or add context and retry
+
+Step 3.5  Verification gate  (Sonnet subagent; re-runs after every fix round)
+        └─ lint + typecheck + affected tests green BEFORE any review round
+           GATE_OK → one-line summary fed into both reviewer prompts
+           GATE_FAIL → back to implementer (doesn't consume a review round; cap=2)
 
 Step 4  Fused review  (loop, cap=4)
         ├─ 4.1  Opus reviews: spec compliance first, then quality
@@ -56,15 +61,22 @@ Step 4  Fused review  (loop, cap=4)
         │        REVIEW_BLOCKING → back to Codex high with fix list
         └─ 4.2  Codex xhigh control review (only if 4.1 passed)
                  Orthogonal angle: edge cases, races, security, plan-vs-code gaps
-                 BOTH CLEAN → auto-commit, advance to next phase
-                 BLOCKING → back to Codex high with combined list
+                 BOTH CLEAN → Step 4.5 → auto-commit, advance to next phase
+                 BLOCKING → fixer resumes its own thread (--resume-task) with combined list
+
+Step 4.5  Review synthesis  (only when the loop took 2+ rounds)
+        └─ Sonnet subagent consolidates ledger + final verdicts into
+           docs/reviews/<slug>-<phase>.md — the archival review record
 
 Step 5  Auto-commit
         └─ Updates plan frontmatter (phase status: done → next: in-progress)
+           Stages phase files + plan + review synthesis (when produced)
            Conventional-commit subject, why-focused body
            Co-Authored-By trailer
            Never git push without explicit user approval
 ```
+
+All Codex resumes are **thread-addressed** (`--resume-task <task-id>`, a local extension of the vendored companion): each role — plan reviewer, implementer — continues exactly its own thread, no matter what ran in between. The Step 4 control review stays fresh each round by design: an independent second opinion must not anchor on its own prior rounds.
 
 ### Multi-phase plans
 
@@ -90,7 +102,14 @@ The plan file is the single source of truth. If a session is interrupted, the or
 
 ## Included skills
 
-Beyond `dev-orchestrator` and `codex-invocation`, the plugin bundles 12 skills from [superpowers](https://github.com/obra/superpowers) v5.0.7 (namespace-stripped):
+Two support skills were adapted from [TRIP-workflow](https://github.com/PiLastDigit/TRIP-workflow) (MIT):
+
+| Skill | What it does |
+|---|---|
+| `codex-ask` | Grounded advisory second opinion from Codex on any question — architecture calls, debugging hypotheses, red-teaming a conclusion. Read-only, threaded per topic, nothing gated on the answer. |
+| `architecture-memory` | Maintain `docs/ARCHI.md` — a persistent, tool-agnostic architecture memory (~10–20k token budget), with update discipline wired into dev-orchestrator prompts and a compaction procedure + token-count script. |
+
+Beyond those, `dev-orchestrator`, and `codex-invocation`, the plugin bundles 12 skills from [superpowers](https://github.com/obra/superpowers) v5.0.7 (namespace-stripped):
 
 | Skill | What it does |
 |---|---|
@@ -141,6 +160,8 @@ All Codex calls go through the wrapper `bin/codex-dispatch`, which:
 - pins `CLAUDE_PLUGIN_DATA` to `~/.claude/plugins/data/superpowers-strigov-ver-codex` so jobs and broker state stay isolated from any other codex install on the same machine;
 - for `task`/`review`/`adversarial-review`, auto-injects `--model gpt-5.5` (overridable via `CODEX_DEFAULT_MODEL` env or by passing an explicit `--model` flag) so the backend can't auto-downgrade to spark on small/low-effort calls.
 
+The vendored companion carries local patches on top of the upstream release (listed in `vendor/codex-companion/VERSION`), most notably `task --resume-task <task-id>` — thread-addressed resume that continues exactly the referenced task's Codex thread regardless of what ran in between. This is what lets each protocol role keep its own persistent thread (idea borrowed from TRIP-workflow's per-target thread files). Re-apply the patches when bumping the vendored runtime.
+
 You no longer need OpenAI's `codex-plugin-cc` installed in Claude Code. To bump the vendored runtime, copy the contents of `plugins/codex/{scripts,prompts,schemas}` and the top-level `LICENSE`/`NOTICE` from a newer `openai/codex-plugin-cc` release tag into `vendor/codex-companion/` and update `VERSION`.
 
 ---
@@ -161,3 +182,5 @@ For trivial edits (rename, typo fix, obvious single-line bugfix) the skill route
 
 Original `superpowers` plugin: https://github.com/obra/superpowers — MIT-licensed.  
 Skills copied from upstream 5.0.7; `superpowers:` namespace stripped; references to `subagent-driven-development` rewritten to `dev-orchestrator`.
+
+Several mechanisms were adapted from [TRIP-workflow](https://github.com/PiLastDigit/TRIP-workflow) by PiLastDigit — MIT-licensed: thread-addressed Codex resume (their per-target thread files → our `--resume-task`), the verification gate before review (their testing gate), the review synthesis step, the `codex-ask` skill, and the ARCHI.md architecture-memory concept with its token-count script.

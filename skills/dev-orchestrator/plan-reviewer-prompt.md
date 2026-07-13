@@ -15,7 +15,7 @@ Use when dispatching a plan review to Codex xhigh.
 
 No `--write`. Review is read-only.
 
-For round 2+, add `--resume-last` and tell Codex the plan file was updated and must be re-read. (`--resume-last` is safe in THIS loop: the revision between rounds is an Opus subagent, so the newest Codex thread is this reviewer's own — see `codex-invocation` "Resume semantics". If stale-lock forces `--fresh`, send the full first-round prompt + ledger digest instead of the follow-up prompt.) Do NOT send the full plan text in any round — always point to the file.
+For round 2+, add `--resume-task <task-id of round 1's review>` and tell Codex the plan file was updated and must be re-read (thread-addressed resume — safe regardless of what else ran in between; see `codex-invocation` "Resume semantics". If a stale job record forces `--fresh`, send the full first-round prompt + ledger digest instead of the follow-up prompt.) Do NOT send the full plan text in any round — always point to the file.
 
 **Filling the `## Context` section**: take repo root from what you already know; take "Relevant files" from the plan's own `## Files` section and the Explore subagent's report; take constraints from the user's request and repo docs you were given. Do NOT research the source tree yourself to fill these — that violates the no-research-on-main rule. If you have nothing for a line, write "none known" rather than guessing.
 
@@ -128,7 +128,7 @@ Be ruthless on BLOCKING; be sparing — only include what truly blocks per the F
 Do not write code. Do not modify files. Read the plan and cited files only.
 ```
 
-## Follow-up prompt (round 2+, with `--resume-last`)
+## Follow-up prompt (round 2+, with `--resume-task <plan-review-task-id>`)
 
 ```
 AUTHORIZED_CHANGE_LEDGER (path): `<repo-root>/docs/plans/<slug>.ledger.json` — read this before re-reviewing. The ledger lists which prior findings the orchestrator accepted (with the authorized change), partially accepted, rejected by scope, deferred, or marked NIT.

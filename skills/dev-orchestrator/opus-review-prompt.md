@@ -31,6 +31,14 @@ You are the code-review stage of dev-orchestrator. You are a fresh Opus subagent
 - Base commit (before this phase): `<base-sha>`
 - Current state: un-committed diff in the working tree (or HEAD if already committed — orchestrator will tell you).
 
+## Verification gate summary
+
+A Sonnet gate subagent already ran the repo's mechanical verification on this exact tree state:
+
+`<gate summary line: lint: … | typecheck: … | tests: …>`
+
+The tree is mechanically green (or the noted stages were skipped/inherited). Do not spend your round re-proving what the gate proved — target your verification (below) at what the gate cannot see: whether the tests verify the right behavior, missing cases, and anything the gate skipped.
+
 Read the plan file first — YAML frontmatter + the `## <id>:` section at minimum. Then inspect the diff via `git diff <base-sha>` (or `git log -p -1` if HEAD).
 
 ## Two-stage review
@@ -77,8 +85,8 @@ Issues must cite `file:line`. Separate true blockers from nits — nits don't tr
 
 Before concluding, run and record outputs:
 - `git diff <base-sha> --stat` (to know what files are in scope)
-- Project tests (whatever the repo uses: `pytest`, `npm test`, `go test`, etc.) — if the diff includes tests, they must pass
-- Typecheck / linter if the repo has one
+- The phase's own tests, plus any test the gate summary marked skipped or that your review put in doubt — you need not re-run the full suite the gate already passed
+- Typecheck / linter only if the gate summary marked them skipped
 - Skip verification only if the repo has no such tooling (say so explicitly)
 
 ## Output format (strict)

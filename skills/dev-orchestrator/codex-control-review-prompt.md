@@ -16,7 +16,7 @@ Use AFTER Opus review (Step 4.1) returned `REVIEW_OK`. This is a second-opinion 
 
 No `--write`. This is read-only review.
 
-For round 2+ in the same Step 4 loop, dispatch a **FRESH task** with the follow-up template below (full context, no `--resume-last`). Do NOT use `--resume-last` here: the fixer (Codex high) ran between control-review rounds, so it would resume the fixer's thread — and a control review that continues the conversation of the code it is checking is no longer an independent second opinion (see `codex-invocation` "Resume semantics").
+For round 2+ in the same Step 4 loop, dispatch a **FRESH task** with the follow-up template below (full context, no resume flags of any kind). This is deliberate even though `--resume-task` makes thread-addressed resume possible: an independent second opinion must not anchor on its own prior rounds, and it must never continue the fixer's thread (see `codex-invocation` "Resume semantics").
 
 Poll with Monitor using the terminal-only filter from `codex-invocation`. Fetch via `"$DISPATCH" result task-XXXX`.
 
@@ -53,6 +53,7 @@ Each blocking finding MUST include:
 - Current phase id: `<id>`
 - Base commit: `<base-sha>`
 - Current diff: un-committed in working tree (use `git diff <base-sha>`)
+- Verification gate summary (mechanical checks already run on this tree state): `<gate summary line: lint: … | typecheck: … | tests: …>` — the tree is green; don't re-prove it, hunt for what green tests can miss.
 
 ## Your review angles (what Opus-flavor review often misses)
 
@@ -94,7 +95,7 @@ Each BLOCKING item MUST carry the three fields above (`authorization_relation`, 
 Do NOT write code. Do NOT modify files. Read plan + diff + any cited files only.
 ```
 
-## Follow-up prompt (round 2+ — FRESH task, no `--resume-last`)
+## Follow-up prompt (round 2+ — FRESH task, no resume flags)
 
 Send the FULL first-round prompt again (all sections: authorization boundary, finding required fields, phase context, review angles, output format), with these modifications:
 
