@@ -45,6 +45,7 @@ Read the entire file including YAML frontmatter. Your task: implement phase **`<
 - Design tokens / patterns to respect: [e.g., "spacing scale from tokens.css", "button variants in components/ui/Button.tsx"]
 - Visual references (screenshots, mockups, links): [paths / URLs if any]
 - Other phases already done (for context, do not modify): [list]
+- If `docs/ARCHI.md` exists, read it before exploring the source — it is the maintained architecture memory. If the plan's steps for your phase include updating it, do so; otherwise do not touch it.
 
 ## Before you begin
 

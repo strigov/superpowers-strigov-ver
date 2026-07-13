@@ -77,7 +77,7 @@ Invocation is read-only (`--effort xhigh`, no `--write`). Poll via Monitor per `
 **Combined verdict handling (same loop as dev-orchestrator Step 4, cap=4):**
 
 - Both clean → proceed to implementation order.
-- Either has BLOCKING → collect combined list (Opus + Codex BLOCKING), fix, then re-dispatch **both** reviewers in a fresh round. `--resume-last` for Codex on rounds 2+.
+- Either has BLOCKING → collect combined list (Opus + Codex BLOCKING), fix, then re-dispatch **both** reviewers in a fresh round. `--resume-task <task id of Codex's previous review round>` for Codex on rounds 2+.
 - Round 4 without both-clean → escalate: combined list + one-sentence impasse summary. User picks accept / another round / close.
 
 Anti-pingpong: don't let either reviewer re-raise an item the other side explicitly rejected with reasoning. No-progress: if two consecutive rounds produce identical combined BLOCKING — escalate.

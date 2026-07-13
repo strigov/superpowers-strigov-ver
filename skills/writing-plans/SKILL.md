@@ -55,14 +55,14 @@ This skill produces plans in the YAML-frontmatter + phases format consumed nativ
 Verdict handling (identical to dev-orchestrator Step 2):
 
 - `APPROVED` → commit the plan file separately (`docs(plans): add <slug>`, stage only the plan file, Co-Authored-By trailer). Then proceed to Execution Handoff.
-- `CHANGES_REQUESTED` → dispatch Opus again with the BLOCKING list and the plan file path, instructing it to revise in place (not rewrite). After Opus returns, re-run Codex with `--resume-last`. Increment counter.
+- `CHANGES_REQUESTED` → dispatch Opus again with the BLOCKING list and the plan file path, instructing it to revise in place (not rewrite). After Opus returns, re-run Codex with `--resume-task <task id of the previous review round>`. Increment counter.
 - Round 4 without APPROVED → escalate to user: plan path + last blocking list + one-sentence disagreement summary. User picks: accept / another round / close.
 
 Anti-pingpong: if Codex repeats a blocking point that was explicitly rejected with reasoning in a prior round, mark `resolved-by-decision`, do not loop on it. No-progress: if two consecutive rounds produce an identical blocking list, escalate immediately.
 
 **New-blocker churn detector.** Escalate immediately, even before cap=4, when all prior blockers are closed (per the ledger) and the reviewer returns only NEW `MUST_FIX_NOW` items that don't cite DATA_LOSS / SECURITY / GUARANTEED_FAIL materiality. `REGRESSION_FROM_AUTHORIZED_FIX` items don't count as "new" — they are causally tied to a prior accepted fix. Canonical wording lives in `../dev-orchestrator/SKILL.md` Step 2 verdict-handling; mirror it from there rather than restating.
 
-**Authorized Change Ledger.** For each `CHANGES_REQUESTED` round, the orchestrator constructs the same `docs/plans/<slug>.ledger.json` artifact described in `../dev-orchestrator/SKILL.md` (see "## Authorized Change Ledger" there for shape, lifecycle, and the reviewer-side materiality vocabulary — `MUST_FIX_NOW`, `REGRESSION_FROM_AUTHORIZED_FIX`, `DEFER`, `NIT`, `REJECTED_BY_SCOPE` — alongside the orchestrator-side label `AUTHORIZED_CHANGE_LEDGER`). Pass the ledger path to Opus on revision dispatch and to Codex on `--resume-last`. The ledger is transient orchestrator state, kept only for the duration of the current Step-2 review loop, and is never committed. The same vocabulary applies to plan-review rounds run from this skill.
+**Authorized Change Ledger.** For each `CHANGES_REQUESTED` round, the orchestrator constructs the same `docs/plans/<slug>.ledger.json` artifact described in `../dev-orchestrator/SKILL.md` (see "## Authorized Change Ledger" there for shape, lifecycle, and the reviewer-side materiality vocabulary — `MUST_FIX_NOW`, `REGRESSION_FROM_AUTHORIZED_FIX`, `DEFER`, `NIT`, `REJECTED_BY_SCOPE` — alongside the orchestrator-side label `AUTHORIZED_CHANGE_LEDGER`). Pass the ledger path to Opus on revision dispatch and to Codex on the `--resume-task` re-review. The ledger is transient orchestrator state, kept only for the duration of the current Step-2 review loop, and is never committed. The same vocabulary applies to plan-review rounds run from this skill.
 
 ## Scope Check
 

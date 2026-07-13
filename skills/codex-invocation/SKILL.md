@@ -54,7 +54,7 @@ A JSON snapshot (workspaceRoot, sessionRuntime, running, recent) means the wrapp
   --background \
   [--write] \
   [--effort <low|medium|high|xhigh>] \
-  [--resume-last | --fresh] \
+  [--resume-task task-XXXX | --resume-last | --fresh] \
   "<prompt>"
 ```
 
@@ -70,7 +70,8 @@ Expected output: `Codex Task started in the background as task-XXXX`.
 - `--background` — always;
 - `--write` — ONLY when the task must modify files (implementation); never on reviews;
 - effort per role: plan / spec / control review = `xhigh`, implementation = `high`;
-- `--resume-last` — only for follow-up rounds within the same loop AND only when no other Codex task ran in between (see "Resume semantics" below); never in the dev-orchestrator Step 4 loop; first round of a new loop goes without it.
+- `--resume-task task-XXXX` — the standard way to continue a prior Codex conversation: resumes the thread of exactly that task id, regardless of what ran in between (see "Resume semantics" below). Track the task id of each role's last dispatch and resume by it;
+- `--resume-last` — legacy positional resume ("newest thread in this repo"); only safe when no other Codex task ran in between. Prefer `--resume-task` everywhere; first round of a new loop goes without either.
 
 ### 5. Poll with terminal-only filter (via Monitor)
 
@@ -104,20 +105,27 @@ Relay Codex's report to the next step verbatim (or summarize into the next promp
 - `--write` — Codex may modify files. Omit for review-only runs (default is read-only).
 - `--effort <low|medium|high|xhigh>` — reasoning effort. In dev-orchestrator: plan review = `xhigh`, implementation = `high`. Nothing lower.
 - `--model <name>` — override the default model. The wrapper auto-pins `gpt-5.5` if you don't pass this; pass an explicit `--model` only to override. Override the wrapper default globally with `CODEX_DEFAULT_MODEL=...` in the env.
-- `--resume-last` — continue the previous Codex session in this repo. Use for follow-up rounds in review loops — but ONLY when it is safe, see "Resume semantics" below.
-- `--fresh` — force new session. Use when stale-lock prevents resume (see below).
+- `--resume-task <task-id>` — continue the Codex conversation of exactly that prior task. Thread-addressed: immune to whatever ran in between. **Preferred resume mechanism.**
+- `--resume-last` — continue the newest task thread in this repo. Legacy; safe only when no other Codex task ran in between. Prefer `--resume-task`.
+- `--fresh` — force new session. Use when a stale job record prevents resume (see below).
 
 Related commands: `status [job-id] [--all] [--json]`, `result [job-id] [--json]`, `cancel [job-id]`.
 
-## Resume semantics (`--resume-last`) — read before using it
+## Resume semantics — read before resuming anything
 
-`--resume-last` resumes the NEWEST completed task thread in this repo for the current session — **regardless of what role that task played** (reviewer, implementer, …). It is NOT "resume my previous task of the same kind". There is no per-task-id resume.
+**`--resume-task task-XXXX`** (vendored-companion extension, idea borrowed from [TRIP-workflow](https://github.com/PiLastDigit/TRIP-workflow)'s per-target thread files) resolves the stored job record of `task-XXXX` and resumes **that job's own thread**. Because the reference is explicit, it stays correct no matter how many other Codex tasks (other roles, other loops, parallel reviews) ran in between. Rules:
 
-Therefore it is safe ONLY when no other Codex task ran since the thread you intend to continue:
+- Track the task id of each ROLE's latest dispatch (plan reviewer, implementer, control reviewer are separate roles — never cross them).
+- Any task id of the same role/thread works: resuming `task-0007` after the thread already continued in `task-0012` lands in the same thread — the id is resolved to its thread, not replayed.
+- The referenced task must be terminal (`completed`); a still-running reference errors out cleanly.
+- Worktree isolation unchanged: pass the same `--cwd` as the original dispatch, ids are per-workspace.
 
-- **Plan / spec review loops** (Codex review → Opus revision → Codex re-review): SAFE — the revision between rounds is a Claude subagent, not a Codex task.
-- **Implementer `NEEDS_CONTEXT` / effort-upgrade re-dispatch**: SAFE — no intervening Codex task.
-- **dev-orchestrator Step 4 fused-review loop**: NOT SAFE — Codex high (fixer) and Codex xhigh (control reviewer) alternate, so `--resume-last` would resume the OTHER role's thread (e.g. the fixer would continue a conversation that was instructed "read-only, do not modify code"). All Step 4 round-2+ dispatches must be FRESH tasks with fully self-contained prompts.
+**`--resume-last`** resumes the NEWEST completed task thread in this repo — regardless of what role that task played. It remains ONLY as a fallback when a task id got lost; if you use it, first confirm via `status --json` that the newest thread really is the one you intend to continue. Prefer `--resume-task` in every loop:
+
+- **Plan / spec review loops** (Codex review → Opus revision → Codex re-review): `--resume-task <plan-review-task-id>`.
+- **Implementer `NEEDS_CONTEXT` / effort-upgrade re-dispatch**: `--resume-task <implementer-task-id>`.
+- **dev-orchestrator Step 4 fix rounds**: `--resume-task <implementer-task-id>` — the fixer continues its own implementation thread with full context even though the control reviewer ran in between. (Before `--resume-task` existed this loop was forced to use fresh fully re-briefed dispatches.)
+- **Step 4 control review rounds 2+**: still dispatched FRESH **by design** — an independent second opinion must not anchor on its own prior rounds. This is a bias decision, not a resume limitation.
 
 When in doubt, dispatch fresh with a full prompt: a fresh task merely costs Codex a context re-read; a wrong resume poisons the thread with another role's instructions.
 
@@ -153,6 +161,8 @@ If a prior task was interrupted (Esc) or the broker restarted, the broker may ho
 ```
 Task task-XXXX is still running. Use /codex:status before continuing it.
 ```
+
+(`--resume-task` hits the same class of problem when the referenced job's on-disk record is stuck at `running`/`queued`: it refuses with `Job task-XXXX is still running; wait for it to finish...`. Same workaround below applies.)
 
 Patching the on-disk JSON at `~/.claude/plugins/data/superpowers-strigov-ver-codex/state/<workspace-slug>/jobs/<task>.json` does **not** help — the broker holds state in memory via `broker.sock`, not on disk.
 

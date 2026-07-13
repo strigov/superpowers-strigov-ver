@@ -15,7 +15,9 @@ Use when dispatching implementation to Codex high.
 
 `$DISPATCH` is the `codex-dispatch` wrapper — resolve it once per session per the `codex-invocation` skill. Write the filled prompt to a scratch file first and pass it via `--prompt-file` — do not inline multi-line text. For a parallel-track phase, add `--cwd <worktree-path>` so Codex works in that track's worktree (and use the same `--cwd` on `status`/`result`).
 
-For follow-up rounds after the fused review (Step 4), dispatch a **FRESH task** (same flags, NO `--resume-last`) with the follow-up template below — it re-briefs the plan path + phase id and carries the authorized blockers. Do NOT use `--resume-last` here: the control reviewer ran between implementer rounds, so `--resume-last` would resume the reviewer's read-only thread, not this implementer's (see `codex-invocation` "Resume semantics"). `--resume-last` remains correct only for the immediate `NEEDS_CONTEXT` / effort-upgrade re-dispatch in Step 3, where no other Codex task ran in between.
+For follow-up rounds after the fused review (Step 4), resume the implementer's own thread: same flags plus `--resume-task <this phase's implementer task id>`, with the fix-round template below (it carries the authorized blockers; the thread already knows the plan and the phase). Thread-addressed resume is safe even though the control reviewer ran in between — see `codex-invocation` "Resume semantics". Never `--resume-last`. The same `--resume-task` id also serves `NEEDS_CONTEXT` / effort-upgrade re-dispatches in Step 3.
+
+**Fresh fallback**: if the implementer thread is unavailable (phase implemented by a Claude subagent, task id lost, stale job record forcing `--fresh`), prepend the re-brief block from the template's "fresh fallback" note so the new session has full context.
 
 Poll with Monitor using the terminal-only filter from `codex-invocation`. Fetch via `"$DISPATCH" result task-XXXX`.
 
@@ -34,6 +36,7 @@ Read the entire file including YAML frontmatter. Your task: implement phase **`<
 
 - Repository root: [path — may be a git worktree when this phase runs as a parallel track; treat it as the entire universe and never touch paths outside it]
 - Style / patterns to follow: [e.g., "match existing module X", "use repository's existing logger"]
+- If `docs/ARCHI.md` exists, read it before exploring the source — it is the maintained architecture memory. If the plan's steps for your phase include updating it, do so; otherwise do not touch it.
 - Other phases already done (for context, do not modify): [list of done phase ids + their commits, if any]
 - Parallel track note (include only when applicable): another phase is being implemented concurrently in a separate worktree. Its files are NOT in your scope; if your phase seems to need changes in them, stop and report `BLOCKED` — do not improvise the other phase's side.
 
@@ -96,14 +99,12 @@ Then:
 Do NOT silently produce work you're unsure about — use `DONE_WITH_CONCERNS`.
 ```
 
-## Follow-up prompt (round 2+ — FRESH task, no `--resume-last`)
+## Fix-round prompt (round 2+ — `--resume-task <implementer-task-id>`)
 
 ```
-You are in the fix round of a review loop. A previous Codex run implemented one phase of an approved plan; the fused review (Opus + Codex xhigh control) found blocking issues. You are a fresh session with no memory of that run — re-read the context below, then fix ONLY the AUTHORIZED_BLOCKERS, re-test, re-report.
+You are in the fix round of a review loop, continuing the thread in which you implemented this phase. The fused review (Opus + Codex xhigh control) found blocking issues in your diff. Fix ONLY the AUTHORIZED_BLOCKERS below, re-test, re-report.
 
-## Plan + phase (authoritative — read it)
-
-Path: `<repo-root>/docs/plans/<slug>.md`. Your phase: **`<id>`** (scope: `<one-line scope from frontmatter>`). The phase's implementation is the un-committed diff in the working tree — inspect it via `git diff <base-sha>`.
+Re-inspect your current diff first — `git diff <base-sha>` — the tree may have moved since your last turn.
 
 ## Git
 
@@ -155,4 +156,14 @@ Then emit the structured fields:
 - Test / typecheck / linter results (commands + pass/fail summary)
 
 Re-run tests after fixes. Every change in the diff must trace back either to an entry in AUTHORIZED_BLOCKERS or to `unauthorized_changes` (with justification).
+```
+
+**Fresh fallback re-brief block** — when the fix round cannot resume the implementer thread (Claude-implemented phase, lost task id, stale job record), replace the opening paragraph above with:
+
+```
+You are in the fix round of a review loop. A previous run implemented one phase of an approved plan; the fused review (Opus + Codex xhigh control) found blocking issues. You are a fresh session with no memory of that run — re-read the context below, then fix ONLY the AUTHORIZED_BLOCKERS, re-test, re-report.
+
+## Plan + phase (authoritative — read it)
+
+Path: `<repo-root>/docs/plans/<slug>.md`. Your phase: **`<id>`** (scope: `<one-line scope from frontmatter>`). The phase's implementation is the un-committed diff in the working tree — inspect it via `git diff <base-sha>`.
 ```

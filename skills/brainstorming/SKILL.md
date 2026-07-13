@@ -223,7 +223,7 @@ Dispatch Codex xhigh using `./spec-reviewer-prompt.md`. Read-only, no `--write`.
 
 Verdict handling:
 - `APPROVED` → commit the spec file from main thread (`git add <path>` + `git commit` with subject `docs(specs): add <topic>`, Co-Authored-By trailer). Then User Review Gate.
-- `CHANGES_REQUESTED` → dispatch Opus subagent again (revision mode) with the BLOCKING list, passing the spec file path. After Opus revises, re-run Codex with `--resume-last`. Increment counter.
+- `CHANGES_REQUESTED` → dispatch Opus subagent again (revision mode) with the BLOCKING list, passing the spec file path. After Opus revises, re-run Codex with `--resume-task <task id of the previous review round>`. Increment counter.
 - Round 4 without APPROVED → escalate to user: spec path + last blocking list + one-sentence disagreement summary. User picks: accept / another round / close.
 
 Anti-pingpong and no-progress rules same as dev-orchestrator Step 2.
