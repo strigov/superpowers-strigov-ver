@@ -87,6 +87,25 @@ Expected output: `Codex Task started in the background as task-XXXX`.
 - `--resume-task task-XXXX` — the standard way to continue a prior Codex conversation: resumes the thread of exactly that task id, regardless of what ran in between (see "Resume semantics" below). Track the task id of each role's last dispatch and resume by it;
 - `--resume-last` — legacy positional resume ("newest thread in this repo"); only safe when no other Codex task ran in between. Prefer `--resume-task` everywhere; first round of a new loop goes without either.
 
+### Ultra smoke test (run ONCE per machine, on the user's first ultra request)
+
+Ultra requires a Plus-or-higher Codex plan AND a transport that supports it — Codex Desktop does; third-party `/responses` relays were observed capped at xhigh/max, and the app-server path this wrapper uses is unverified. Before the first real ultra dispatch on a machine, offer the user this cheap probe (seconds of tokens):
+
+```bash
+"$DISPATCH" task --background --model gpt-5.6-sol --effort ultra "Reply with one word: PONG"
+# after the Monitor loop reports terminal:
+"$DISPATCH" status task-XXXX --json     # failed → read the log below
+"$DISPATCH" result task-XXXX
+cat ~/.claude/plugins/data/superpowers-strigov-ver-codex/state/<workspace-slug>/jobs/task-XXXX.log
+```
+
+Interpretation:
+- `failed` with an effort/entitlement error → ultra does not pass through this path; tell the user, and for ultra runs suggest Codex Desktop. Real dispatches proceed only after the user picks a fallback (`max`) explicitly.
+- `completed` → check the job log / events for the effective reasoning effort and for parallel-subagent activity; a genuine ultra run shows markedly higher token use even on a trivial prompt. If effort was silently coerced to xhigh/max, treat this path as "no ultra" — silent coercion means the user pays Sol prices without getting ultra.
+
+Remember the outcome for the rest of the session; do not re-probe before every ultra dispatch.
+
+
 ### 5. Poll with terminal-only filter (via Monitor)
 
 ```bash

@@ -1,7 +1,7 @@
 # superpowers-strigov-ver
 
 Personal Claude Code plugin assembled from:
-Current repo/plugin version: `0.5.1`.
+Current repo/plugin version: `0.5.2`.
 
 - **`dev-orchestrator`** — multi-model subagent-driven workflow (GPT-5.6 Sol max plan + Opus plan-review loop + GPT-5.6 Luna max implement with Terra xhigh escalation + Sonnet verification gate + Opus code review + Sol xhigh control review + review synthesis, auto-commit, loop cap=4 with anti-pingpong / no-progress guards; thread-addressed Codex resume via `--resume-task`; `ultra` effort strictly user-initiated).
 - **`codex-invocation`** — reference recipe for calling Codex via the `bin/codex-dispatch` wrapper around the vendored `codex-companion.mjs` (background mode + Monitor polling; bypasses the silent auto-reject on standard Agent/`codex exec` paths and pins the default model to `gpt-5.6-sol` to block backend auto-downgrade to spark; per-role GPT-5.6 routing table included).
