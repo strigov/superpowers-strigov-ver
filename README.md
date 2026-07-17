@@ -1,201 +1,247 @@
+<div align="center">
+
 # superpowers-strigov-ver
 
-A Claude Code plugin that replaces the default "Claude does everything" mode with a **structured multi-model development workflow**: Sonnet orchestrates, Opus judges, Codex implements and reviews.
+**A structured multi-model software delivery workflow for Claude Code.**
 
-Current repo/plugin version: `0.5.2`.
+[Русская версия](./README.ru.md)
 
-## The idea
+![Version](https://img.shields.io/badge/version-0.6.0-6c63ff)
+![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-d97757)
+![License](https://img.shields.io/badge/license-MIT-2ea44f)
 
-Claude Code's default behavior puts one model in charge of everything — planning, coding, reviewing, committing. This works for small tasks but breaks down on anything non-trivial: the model that writes code also reviews it, which is a conflict of interest; there's no plan to hold work accountable to; each session starts from scratch.
+</div>
 
-This plugin replaces that with a division of labor matched to what each model is actually good at:
+`superpowers-strigov-ver` is an opinionated Claude Code plugin that separates planning, implementation, verification, and review across several model roles. The main Claude thread stays focused on orchestration while fresh specialist agents do the judgment-heavy and code-writing work.
 
-- **Sonnet** (main thread) — cheap, fast orchestration. Reads output, dispatches next step, polls, does git. Never writes production code.
-- **GPT-5.6 Sol max** (Codex) — plan writing and plan revisions. (`ultra` — Sol's parallel-subagent mode — exists but is used only when the user explicitly asks for it.)
-- **Opus** (subagent, `ultrathink`) — judgment. Reviews the plan, reviews the code (4.1), diagnoses blockers. Gets a clean context every invocation.
-- **GPT-5.6 Luna max** (Codex) — implementation and fix rounds. Cheap, strong agentic coder; **GPT-5.6 Terra xhigh** is the reasoning escalation when Luna gets stuck.
-- **GPT-5.6 Sol xhigh** (Codex) — skeptical read-only control review after Opus clears the code (4.2).
+The goal is simple: produce a written plan before code, keep the implementer separate from its reviewers, make long tasks resumable, and refuse to call work complete until both phase-level and whole-branch checks are clean.
 
-**Family rule**: writer and reviewer of the same artifact are never from the same model family — Sol writes the plan, Opus reviews it; Luna writes the code, Opus reviews it and Sol cross-checks.
+> Current source version: **0.6.0**
 
-The result: a plan exists before a line of code is written, two independent reviewers sign off before anything commits, and the whole session is resumable across days.
+## Why this exists
 
----
+A single-model workflow is convenient, but it creates predictable failure modes on non-trivial work:
+
+- the model that wrote the code also grades it;
+- implementation begins before requirements and interfaces are explicit;
+- review rounds lose context or drift into scope expansion;
+- interrupted sessions repeat work because progress lives only in chat history;
+- a green phase can still break when combined with later phases.
+
+This plugin turns those weak spots into explicit protocol stages with durable state, independent review, bounded loops, and human escalation when the models disagree.
+
+## Highlights
+
+- **Separation of duties** — different model families write and review the same artifact.
+- **Plan-first execution** — implementation starts only after an Opus plan review.
+- **Two-stage phase review** — Opus checks spec compliance and quality; Codex Sol performs an orthogonal control review.
+- **Mechanical verification gate** — lint, typecheck, and affected tests run before every expensive review round.
+- **Whole-branch merge gate** — a final Opus pass checks cross-phase integration and runs the full suite.
+- **Durable resume** — YAML plan state, commit ranges, ledgers, reports, and thread-addressed Codex resume survive long sessions and compaction.
+- **Review packages** — reviewers consume one generated file containing the commit list, stat, and full contextual diff.
+- **Safe parallelism** — plan-marked independent phases can run in isolated Git worktrees, with a hard width cap of two.
+- **Bounded review loops** — anti-ping-pong, no-progress detection, churn detection, and explicit round caps prevent endless agent loops.
+- **Conservative Git behavior** — no force push, no amend, no skipped hooks, and no push without explicit approval in the current session.
+
+## Model roles
+
+These are the intended defaults used by the protocol:
+
+| Role | Model | Responsibility |
+|---|---|---|
+| Orchestrator | Claude Sonnet | Triage, dispatch, polling, state transitions, and Git bookkeeping. It does not write production code. |
+| Plan writer | GPT-5.6 Sol `max` | Explores the requested change, writes the implementation plan, and applies authorized plan revisions. |
+| Plan reviewer | Claude Opus with `ultrathink` | Reviews the plan in a fresh context and blocks on material gaps or contradictions. |
+| Implementer | GPT-5.6 Luna `max` | Implements non-frontend phases and handles authorized fix rounds. |
+| Reasoning escalation | GPT-5.6 Terra `xhigh` | Continues a blocked implementation thread when the problem needs deeper reasoning. |
+| Primary code reviewer | Claude Opus with `ultrathink` | Reviews both spec compliance and code quality on every phase. |
+| Control reviewer | GPT-5.6 Sol `xhigh` | Performs a fresh, read-only second opinion focused on edge cases, races, security, and regressions. |
+| Verification and synthesis | Claude Sonnet | Runs mechanical gates and consolidates multi-round review history. |
+
+`ultra` is never selected automatically. The plan writer uses it only when the user explicitly asks for `ultra` in their own request.
 
 ## Workflow
 
-### Triage
-
-Every task goes through a triage first:
-
-```
-Single-file change, <20 lines, no architectural judgment?
-  YES → Sonnet quickfix subagent (fast path, no review loop)
-  NO  → Full protocol
-```
-
-### Full protocol (6 steps)
-
-```
-Step 1  Codex Sol max writes a plan  (--write)
-        └─ docs/plans/YYYY-MM-DD-<slug>.md
-           YAML frontmatter: phases, statuses
-           Sections: Goal · Files · Contracts · Test strategy · Risks · Phases
-
-Step 2  Opus reviews the plan  (loop, cap=4; fresh subagent each round)
-        └─ APPROVED → commit plan, go to Step 3
-           CHANGES_REQUESTED → Sol revises its own thread (--resume-task) → fresh Opus re-review
-           4 rounds without approval → escalate to user
-
-Step 3  Codex Luna max implements current phase  (--write)
-        (BLOCKED + "needs more reasoning" → resume the thread at Terra xhigh)
-        └─ DONE → Step 3.5
-           DONE_WITH_CONCERNS → Sonnet reads concerns, decides
-           NEEDS_CONTEXT → provide context, resume implementer thread (--resume-task)
-           BLOCKED → Opus diagnoses → escalate or add context and retry
-
-Step 3.5  Verification gate  (Sonnet subagent; re-runs after every fix round)
-        └─ lint + typecheck + affected tests green BEFORE any review round
-           GATE_OK → one-line summary fed into both reviewer prompts
-           GATE_FAIL → back to implementer (doesn't consume a review round; cap=2)
-
-Step 4  Fused review  (loop, cap=4)
-        ├─ 4.0  Review package built per round (bin/review-package):
-        │        commit list + stat + full -U10 diff in one file —
-        │        reviewers read the package, never re-run git
-        ├─ 4.1  Opus reviews: spec + quality, both every round
-        │        Inputs: package + implementer's file-based report + Global Constraints
-        │        REVIEW_OK → trigger 4.2
-        │        REVIEW_BLOCKING → back to the fixer with fix list
-        └─ 4.2  Codex Sol xhigh control review (only if 4.1 passed)
-                 Orthogonal angle: edge cases, races, security, plan-vs-code gaps
-                 BOTH CLEAN → Step 4.5 → auto-commit, advance to next phase
-                 BLOCKING → fixer resumes its own thread (--resume-task) with combined list
-
-Step 4.5  Review synthesis  (only when the loop took 2+ rounds)
-        └─ Sonnet subagent consolidates ledger + final verdicts into
-           docs/reviews/<slug>-<phase>.md — the archival review record
-
-Auto-commit (per phase, after a clean fused review)
-        └─ Updates plan frontmatter (phase status: done → next: in-progress)
-           Stages phase files + plan + review synthesis (when produced)
-           Conventional-commit subject, why-focused body
-           Co-Authored-By trailer
-           Never git push without explicit user approval
-
-Step 5  Final whole-branch review  (once per plan, cap=2)
-        └─ After the last phase lands, before plan archival:
-           one Opus pass over the entire MERGE_BASE..HEAD diff —
-           cross-phase integration, architecture, full suite + typecheck,
-           triage of all deferred ledger items
-           REVIEW_OK → archive plan   BLOCKING → ONE Luna fix wave → round 2
+```mermaid
+flowchart TD
+    A["Implementation request"] --> B{"Trivial single-file change?"}
+    B -->|"Yes"| Q["Sonnet quickfix subagent"]
+    B -->|"No"| P["Sol max writes the plan"]
+    P --> R["Opus reviews the plan"]
+    R -->|"Changes requested"| P
+    R -->|"Approved"| I["Luna max implements one phase"]
+    I --> G["Sonnet verification gate"]
+    G -->|"Fail"| I
+    G -->|"Pass"| O["Opus spec + quality review"]
+    O -->|"Blocking"| I
+    O -->|"Clean"| C["Sol xhigh control review"]
+    C -->|"Blocking"| I
+    C -->|"Clean"| M["Commit the phase"]
+    M --> N{"More phases?"}
+    N -->|"Yes"| I
+    N -->|"No"| F["Opus whole-branch review"]
+    F -->|"Blocking"| W["One Luna fix wave"]
+    W --> F
+    F -->|"Clean"| D["Finish or archive the plan"]
+    Q --> D
 ```
 
-All Codex resumes are **thread-addressed** (`--resume-task <task-id>`, a local extension of the vendored companion): each role — plan writer, implementer — continues exactly its own thread, no matter what ran in between. Claude-side reviews (plan review, 4.1) and the Step 4 control review are fresh each round by design: an independent reviewer must not anchor on its own prior rounds.
+### 1. Plan
 
-### Multi-phase plans
+Codex Sol writes `docs/plans/YYYY-MM-DD-<slug>.md` with YAML frontmatter and explicit sections for acceptance criteria, non-goals, global constraints, files, contracts, tests, risks, and phases. Every phase declares the interfaces it consumes and produces.
 
-A plan can have multiple phases (Ф1, Ф2, Ф3…). Steps 1 and 2 cover **all phases at once** upfront. Steps 3–4.5 + auto-commit run **per phase** with no confirmation prompts between them — the plan was already approved. Step 5 runs once, after the last phase.
+### 2. Plan review and pre-flight
 
-### Resume across sessions
+A fresh Opus subagent reviews the plan. Blocking findings are triaged into an authorization ledger before Sol is allowed to revise anything. After approval, the orchestrator performs a narrow pre-flight scan for conflicting global constraints, broken `Consumes`/`Produces` links, and plan-mandated defects.
 
-The plan file is the single source of truth. If a session is interrupted, the orchestrator scans `docs/plans/` for a plan with `status: in-progress`, surfaces it to the user, and picks up at the right phase.
+### 3. Implement and verify
 
----
+Luna implements one phase at a time. Frontend-only phases can be routed to a Claude frontend implementer. Before review, a Sonnet verification gate runs the relevant lint, typecheck, and tests. A red gate returns directly to the implementer without consuming a review round.
 
-## Safety guards
+### 4. Fused phase review
 
-**Anti-pingpong**: if Codex raises a review point that was already explicitly rejected with reasoning in a prior round, it is marked `resolved-by-decision` and not looped on again.
+Each round starts by generating a review package with `bin/review-package`. Opus reviews spec compliance and quality; only a clean Opus verdict triggers the fresh Sol control review. Accepted findings go back to the original implementer through thread-addressed resume. Multi-round reviews are synthesized into `docs/reviews/`.
 
-**No-progress detector**: if two consecutive review rounds produce an identical blocking list, the loop escalates immediately instead of running to cap.
+### 5. Commit and continue
 
-**Escalation cap**: 4 rounds without clean review → Opus writes a one-sentence summary of the impasse, user decides: accept / another round / close.
+After both reviewers are clean, the orchestrator updates plan state and creates a conventional commit for the phase. It stages files by name, preserves unrelated work, never amends, and never pushes without explicit user approval.
 
-**Auto-commit rules**: never `--no-verify`, never `--amend`. Skips auto-commit if unrelated uncommitted changes exist in the tree. Never pushes without explicit per-session user approval.
+### 6. Final whole-branch review
 
----
+After the final phase, a fresh Opus subagent reviews the entire branch from its merge base, checks cross-phase contracts and architecture, and runs the full test suite plus typecheck/lint. One consolidated Luna fix wave is allowed before the second and final review round.
 
-## Included skills
+## Safety and control
 
-Two support skills were adapted from [TRIP-workflow](https://github.com/PiLastDigit/TRIP-workflow) (MIT):
-
-| Skill | What it does |
+| Guard | Behavior |
 |---|---|
-| `codex-ask` | Grounded advisory second opinion from Codex on any question — architecture calls, debugging hypotheses, red-teaming a conclusion. Read-only, threaded per topic, nothing gated on the answer. |
-| `architecture-memory` | Maintain `docs/ARCHI.md` — a persistent, tool-agnostic architecture memory (~10–20k token budget), with update discipline wired into dev-orchestrator prompts and a compaction procedure + token-count script. |
-
-Beyond those, `dev-orchestrator`, and `codex-invocation`, the plugin bundles 12 skills from [superpowers](https://github.com/obra/superpowers) v5.0.7 (namespace-stripped):
-
-| Skill | What it does |
-|---|---|
-| `brainstorming` | Interactive visual brainstorm with a local browser companion |
-| `dispatching-parallel-agents` | Pattern for running independent subagents in parallel |
-| `executing-plans` | Guidance for executing a written plan step by step |
-| `finishing-a-development-branch` | Checklist before merging: tests, coverage, review, PR |
-| `receiving-code-review` | How to process and respond to code review feedback |
-| `requesting-code-review` | How to request a thorough code review from a subagent |
-| `systematic-debugging` | Root-cause-first debugging protocol with test-pressure resistance |
-| `test-driven-development` | TDD cycle adapted for Claude Code; anti-patterns reference |
-| `using-git-worktrees` | Safe parallel work via git worktrees |
-| `verification-before-completion` | Checklist before declaring any task done |
-| `writing-plans` | Standalone plan production — same Sol-max-writes / Opus-reviews pair as the orchestrator |
-| `writing-skills` | How to author Claude Code skills; Anthropic best practices |
-
-**Code review** is dispatched as an Opus subagent via `Agent(subagent_type="general-purpose", model="opus", ...)` — see `skills/requesting-code-review/`. The standalone `code-reviewer` agent type from upstream was removed; use the skill instead.
-
-**Not included from upstream**: `subagent-driven-development` (replaced by `dev-orchestrator`), `using-superpowers` (aggressive directive injection not wanted), the SessionStart hook.
-
----
+| Main-thread isolation | The orchestrator does not write production code or research the codebase itself. |
+| Authorization ledger | Review feedback is triaged before any fixer receives it; out-of-scope changes are not silently implemented. |
+| Anti-ping-pong | A finding rejected with recorded reasoning cannot be reintroduced unchanged. |
+| No-progress detector | Identical blocking lists in consecutive rounds escalate immediately. |
+| New-blocker churn detector | Late low-materiality findings cannot keep a converged review loop alive forever. |
+| Review caps | Plan and phase review loops cap at four rounds; final whole-branch review caps at two. |
+| Human authority | Plan-mandated conflicts, scope expansion, and unresolved review impasses are escalated to the user. |
+| Git safety | No `--no-verify`, no `--amend`, no force push, and no push without current-session approval. |
 
 ## Installation
 
-```
+### Requirements
+
+- A recent version of **Claude Code**.
+- The standalone **Codex CLI**:
+
+  ```bash
+  npm install -g @openai/codex
+  ```
+
+- A one-time Codex login on each machine:
+
+  ```bash
+  codex login
+  ```
+
+  From inside Claude Code, prefix shell commands with `!`, for example `!codex login`.
+
+You do **not** need OpenAI's separate `codex-plugin-cc` Claude Code plugin. The required companion runtime is vendored in this repository.
+
+### Install from the marketplace
+
+Run these commands in Claude Code:
+
+```text
 /plugin marketplace add strigov/strigov-cc-plugins
 /plugin install superpowers-strigov-ver@strigov-cc-plugins
+/reload-plugins
 ```
 
-Обновление в дальнейшем:
+To update later:
 
-```
+```text
 /plugin update superpowers-strigov-ver@strigov-cc-plugins
 ```
 
-### Requirements
-
-1. **Claude Code** (any recent version)
-2. **Codex CLI** — `npm install -g @openai/codex` (the standalone CLI, not the OpenAI codex Claude Code plugin — we vendor what we need from that plugin under `vendor/codex-companion/`, see below)
-3. **Codex login** — run once per machine: `!codex login` (the `!` prefix runs it in your shell)
-
-### Vendored Codex companion
-
-The Codex companion runtime (originally part of OpenAI's `codex-plugin-cc`) is vendored into this plugin under `vendor/codex-companion/` (Apache-2.0, copyright OpenAI; see `vendor/codex-companion/LICENSE` and `NOTICE`). Vendored release: see `vendor/codex-companion/VERSION`.
-
-All Codex calls go through the wrapper `bin/codex-dispatch`, which:
-- resolves `vendor/codex-companion/scripts/codex-companion.mjs` from either the marketplace install path (`~/.claude/plugins/cache/strigov-cc-plugins/superpowers-strigov-ver/<version>/...`) or the local dev tree;
-- pins `CLAUDE_PLUGIN_DATA` to `~/.claude/plugins/data/superpowers-strigov-ver-codex` so jobs and broker state stay isolated from any other codex install on the same machine;
-- for `task`/`review`/`adversarial-review`, auto-injects `--model gpt-5.6-sol` (overridable via `CODEX_DEFAULT_MODEL` env or by passing an explicit `--model` flag) so the backend can't auto-downgrade to spark on small/low-effort calls; protocol dispatches pass explicit per-role models (Sol plan/review, Luna implementation, Terra escalation).
-
-The vendored companion carries local patches on top of the upstream release (listed in `vendor/codex-companion/VERSION`), most notably `task --resume-task <task-id>` — thread-addressed resume that continues exactly the referenced task's Codex thread regardless of what ran in between — and the `max` / `ultra` reasoning efforts for GPT-5.6 (upstream v1.0.6 still caps at `xhigh`). This is what lets each protocol role keep its own persistent thread (idea borrowed from TRIP-workflow's per-target thread files). Re-apply the patches when bumping the vendored runtime.
-
-You no longer need OpenAI's `codex-plugin-cc` installed in Claude Code. To bump the vendored runtime, copy the contents of `plugins/codex/{scripts,prompts,schemas}` and the top-level `LICENSE`/`NOTICE` from a newer `openai/codex-plugin-cc` release tag into `vendor/codex-companion/` and update `VERSION`.
-
----
-
 ## Usage
 
+Start the full protocol explicitly:
+
+```text
+/dev Implement resumable uploads with integrity checks
 ```
-/dev <task description>
+
+Or describe an implementation task normally. The `dev-orchestrator` skill recognizes implementation requests in English and Russian and performs triage automatically.
+
+Trivial edits—such as a typo, rename, or obvious one-line fix—take the Sonnet quickfix path without invoking the full review protocol.
+
+## What is included
+
+### Fork-specific skills
+
+| Skill | Purpose |
+|---|---|
+| `dev-orchestrator` | The complete multi-model planning, implementation, review, commit, and resume protocol. |
+| `codex-invocation` | Reliable background Codex dispatch through the vendored companion runtime. |
+| `codex-ask` | A grounded, read-only Codex second opinion, threaded by topic. |
+| `architecture-memory` | Maintains a compact, persistent `docs/ARCHI.md` architecture map. |
+
+The plugin also includes the `/dev` command and the helper scripts `bin/codex-dispatch`, `bin/sdd-workspace`, and `bin/review-package`.
+
+### Bundled upstream skills
+
+The repository carries adapted, namespace-stripped versions of these Superpowers skills:
+
+`brainstorming`, `dispatching-parallel-agents`, `executing-plans`, `finishing-a-development-branch`, `receiving-code-review`, `requesting-code-review`, `systematic-debugging`, `test-driven-development`, `using-git-worktrees`, `verification-before-completion`, `writing-plans`, and `writing-skills`.
+
+The upstream `subagent-driven-development` skill is replaced by `dev-orchestrator`. The aggressive `using-superpowers` injection and SessionStart hook are intentionally not included.
+
+## Repository layout
+
+```text
+.
+├── .claude-plugin/plugin.json       # Plugin manifest and source version
+├── commands/dev.md                  # /dev command entry point
+├── bin/
+│   ├── codex-dispatch               # Vendored companion wrapper
+│   ├── review-package               # Reviewer-ready diff package generator
+│   └── sdd-workspace                # Per-plan scratch workspace resolver
+├── skills/
+│   ├── dev-orchestrator/            # Protocol and role prompt templates
+│   ├── codex-invocation/
+│   ├── codex-ask/
+│   ├── architecture-memory/
+│   └── ...                          # Adapted Superpowers skills
+├── tests/test-sdd-scripts.sh        # Workspace/package integration tests
+└── vendor/codex-companion/          # Vendored OpenAI companion runtime
 ```
 
-Or just describe an implementation task in plain language — `dev-orchestrator` triggers on keywords like *implement*, *build*, *write the code*, *реализуй*, *запили*, *накодь*.
+## Vendored Codex companion
 
-For trivial edits (rename, typo fix, obvious single-line bugfix) the skill routes to Sonnet quickfix automatically — no Codex round trips.
+All Codex calls go through `bin/codex-dispatch`. The wrapper resolves the vendored runtime from either a marketplace installation or a local checkout and isolates its state under `~/.claude/plugins/data/superpowers-strigov-ver-codex`.
 
----
+The current vendored base is recorded in `vendor/codex-companion/VERSION`. Local patches add thread-addressed `task --resume-task <task-id>`, GPT-5.6 `max`/`ultra` reasoning efforts, broker cleanup, and optional review authorization fields. Reapply those patches whenever the upstream runtime is updated.
 
-## Upstream attribution
+## Development and release checks
 
-Original `superpowers` plugin: https://github.com/obra/superpowers — MIT-licensed.  
-Skills copied from upstream 5.0.7; `superpowers:` namespace stripped; references to `subagent-driven-development` rewritten to `dev-orchestrator`.
+Run the integration suite:
 
-Several mechanisms were adapted from [TRIP-workflow](https://github.com/PiLastDigit/TRIP-workflow) by PiLastDigit — MIT-licensed: thread-addressed Codex resume (their per-target thread files → our `--resume-task`), the verification gate before review (their testing gate), the review synthesis step, the `codex-ask` skill, and the ARCHI.md architecture-memory concept with its token-count script.
+```bash
+bash tests/test-sdd-scripts.sh
+```
+
+For a release, keep the version synchronized in:
+
+- `.claude-plugin/plugin.json`;
+- `README.md` and `README.ru.md`;
+- `PLUGIN_README.md`;
+- the `superpowers-strigov-ver` entry in the external [`strigov-cc-plugins` marketplace catalog](https://github.com/strigov/strigov-cc-plugins).
+
+Updating this source repository alone does not publish a new marketplace version—the catalog entry must be bumped separately.
+
+## Attribution
+
+- [Superpowers](https://github.com/obra/superpowers) by Jesse Vincent / obra — MIT. This fork carries adapted skills from v5.0.7 and selected, source-verified mechanisms from Superpowers 6 v6.1.1.
+- [TRIP-workflow](https://github.com/PiLastDigit/TRIP-workflow) by PiLastDigit — MIT. Thread-addressed resume, the verification gate, review synthesis, `codex-ask`, and architecture-memory concepts were adapted from this project.
+- The vendored Codex companion runtime originates from OpenAI's `codex-plugin-cc` and remains under Apache-2.0; see `vendor/codex-companion/LICENSE` and `NOTICE`.
+
+## License
+
+The original work in this repository is released under the [MIT License](./LICENSE). Vendored components retain their respective licenses.
