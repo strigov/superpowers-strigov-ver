@@ -19,7 +19,9 @@ Model choice:
 
 The subagent has NO session context. The prompt must be fully self-contained — include plan path + phase id + visual intent + any screenshot references + relevant existing files/components to follow.
 
-For follow-up rounds after the fused review (Step 4), start a **fresh** Agent call with the COMBINED BLOCKING list (from Opus review + Codex xhigh control review, merged by the orchestrator). Claude subagents do not have a `--resume-last` equivalent; every round is a fresh dispatch with full context.
+Both templates take a `[REPORT_FILE]` placeholder — the implementer writes its full report there so the detail never transits your context. Resolve it once per phase as `$(sdd-workspace <plan-file>)/phase-<id>-report.md` and substitute the absolute path, exactly as for the Codex implementer (see SKILL.md Step 3). Fix rounds append to the same file — never mint a new report path for round 2+.
+
+For follow-up rounds after the fused review (Step 4), start a **fresh** Agent call with the COMBINED BLOCKING list (the open ACCEPTED / PARTIALLY_ACCEPTED ledger items, merged from Opus review + Codex Sol xhigh control review by the orchestrator) and the same `[REPORT_FILE]`. Claude subagents do not have a `--resume-last` equivalent; every round is a fresh dispatch with full context.
 
 ## First-round prompt template
 
@@ -64,12 +66,14 @@ Do not guess on visuals. A wrong mockup is worse than a clarifying question.
 4. Write tests where they belong for this stack (component tests, snapshot / visual if established, e2e only if the plan asks).
 5. Run tests / typecheck / linters; confirm they pass.
 6. Self-review (see below) and fix issues before reporting.
+7. Write your full report to [REPORT_FILE], then emit the short final message (see Report format below).
 
 ## Discipline
 
 - **YAGNI**: build only what the plan asks for. No speculative flags, extra variants, or "nice to haves".
 - **Existing patterns**: reuse tokens, primitives, and utilities instead of re-creating them. Follow established conventions.
 - **No unrelated commits**: do not modify files outside the plan's scope — even visual polish on neighbouring components.
+- **Git**: do NOT run `git commit`, `git push`, or any history-modifying git command — leave all changes uncommitted in the working tree. The orchestrator reviews the diff and handles git itself. (If the plan's last step says "Commit the phase", skip that step and note it in your report.)
 - **Accessibility**: semantic HTML, keyboard navigation, visible focus states, sensible aria labels, contrast passes AA. Not "nice to have".
 
 ## Self-review before reporting
@@ -94,16 +98,24 @@ STOP and escalate (`BLOCKED`) when:
 
 ## Report format (strict)
 
-Emit one report at the end. First line is status:
-
-`DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`
-
-Then:
+Write your full report to [REPORT_FILE]:
 - What you implemented (or attempted, if blocked)
 - What you tested and results (commands + output summary)
 - Files changed (paths)
 - Self-review findings (if any)
 - Concerns / questions / blockers (if status ≠ DONE)
+
+Then emit your final message with ONLY (under 15 lines — the detail lives in the report file). Line 1 is the bare status token — no preamble, no markdown formatting:
+
+`DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`
+
+Then:
+- One-line test summary (e.g. "14/14 passing")
+- Number of files changed (you do not commit — the diff stays in the working tree)
+- Your concerns, if any
+- The report file path
+
+If BLOCKED or NEEDS_CONTEXT, put the specifics in the final message itself — the orchestrator acts on it directly.
 
 Do NOT silently produce work you're unsure about — use `DONE_WITH_CONCERNS`.
 ```
@@ -113,7 +125,7 @@ Do NOT silently produce work you're unsure about — use `DONE_WITH_CONCERNS`.
 ```
 ultrathink
 
-Previous frontend implementation had blocking issues from the fused review (Opus + Codex xhigh control). Fix them, re-test, re-report.
+Previous frontend implementation had blocking issues from the fused review (Opus + Codex Sol xhigh control). Fix them, re-test, re-report.
 
 ## Plan + phase
 
@@ -130,5 +142,15 @@ Path: `<repo-root>/docs/plans/<slug>.md`, phase `<id>`. Read the plan file for s
 - Address every blocking item. If you disagree with one, explain in the report — do not silently ignore.
 - Do NOT expand scope beyond fixing these items.
 - Re-run tests / typecheck / linters after fixes; report results.
-- Same report format as before.
+- Do NOT run `git commit` / `git push` — leave all changes uncommitted; the orchestrator handles git.
+
+## Required output
+
+First, append a section `## Fix round <N>` to [REPORT_FILE] (the same report file from the first round — do not overwrite it, do not create a new one) containing ALL THREE of:
+
+1. The names of the tests covering each fixed item
+2. The exact test command(s) you ran
+3. The relevant output
+
+All three are mandatory — a fix-round report missing any of them is returned to you before re-review; reviewers will not re-run the full suite, so your report is the test evidence. Then emit the short final message in the same format as the first round (status token on line 1, test summary, files changed count, concerns, the report file path).
 ```

@@ -79,13 +79,14 @@ Body must have these H2 sections, in order:
 1. `## Goal` — what this enables, why now. Two short paragraphs max.
 1a. `## Acceptance criteria` — 3–7 externally observable criteria that define "done" for the whole plan. Reviewers may block only on these criteria, stated user requirements, repo constraints, or high-materiality risks (`DATA_LOSS`, `SECURITY`, `GUARANTEED_FAIL`, `REGRESSION`, `ACCEPTANCE_CRITERIA`).
 1b. `## Non-goals / deferred` — explicit exclusions. Reviewers MUST classify requests for these as `REJECTED_BY_SCOPE` or `DEFER` unless the orchestrator authorizes scope expansion.
+1c. `## Global Constraints` — the spec's project-wide requirements — version floors, dependency limits, naming and copy rules, platform requirements — one line each, with exact values copied verbatim from the spec or user request. Every phase's requirements implicitly include this section. If the spec imposes none, write literally `None declared in the spec.` Do NOT merge into `## Contracts`: Contracts define interfaces between phases; Global Constraints are external requirements binding the whole plan.
 2. `## Files` — paths to create/modify, grouped by phase. Each file: one-line responsibility.
 3. `## Contracts` — function signatures, data shapes, API surface. Exact enough that Codex can implement without guessing.
 4. `## Test strategy` — what proves correctness, per phase. Test types (unit/integration/e2e), key cases, what NOT to test.
 5. `## Risks / unknowns / assumptions` — named explicitly. Anything you are guessing at.
 6. `## Phases` — per phase an H2 `## Ф1: <title>`, `## Ф2: <title>`, ... with the detailed steps inside each.
 
-For sections 1a and 1b, use this template body verbatim (replace bullets with the plan's actual content):
+For sections 1a, 1b, and 1c, use this template body verbatim (replace bullets with the plan's actual content):
 
 ## Acceptance criteria
 
@@ -95,10 +96,25 @@ List 3–7 externally observable criteria that define "done" for the whole plan.
 
 List explicit exclusions. Reviewers MUST classify requests for these as `REJECTED_BY_SCOPE` or `DEFER` unless the orchestrator authorizes scope expansion.
 
+## Global Constraints
+
+List the spec's project-wide requirements — version floors, dependency limits, naming and copy rules, platform requirements — one line each, with exact values copied verbatim from the spec or user request. If the spec imposes none, write literally `None declared in the spec.`
+
+## Per-phase layout
+
+Every phase in `## Phases` opens with a `**Files in this phase:**` list (Create / Modify / Test — exact paths), then an `**Interfaces:**` block:
+
+**Interfaces:**
+- Consumes: [what this phase uses from earlier phases — exact signatures. If nothing, write literally `nothing`]
+- Produces: [what later phases rely on — exact function names, parameter and return types. If nothing, write literally `nothing`]
+
+The `**Interfaces:**` block is mandatory in EVERY phase — an empty side is written explicitly as `nothing`, never omitted. It matters most for `parallel_group` phases (built concurrently — neighbors' code is invisible until merge) and for BE/FE pairs building to one contract, and it gives reviewers a mechanical cross-phase consistency check.
+
 ## Phase decomposition rules
 
 - Each phase must be independently commit-able and produce a working system (no "Ф1 breaks build, Ф2 fixes it").
 - Each phase should be shippable in one implementer run (roughly a few files, a few hours of work).
+- **Right-sizing (lower bound)**: a phase is the smallest unit that carries its own test cycle and is worth a fresh reviewer's gate. When drawing phase boundaries: fold setup, configuration, scaffolding, and documentation steps into the phase whose deliverable needs them; split only where a reviewer could meaningfully reject one phase while approving its neighbor. Each phase ends with an independently testable deliverable.
 - Prefer 2–5 phases. More than 5 is a signal to split into multiple plans.
 - Put risky / blocking decisions as early as possible so later phases can assume they're settled.
 - **Backend / frontend split (required for full-stack work)**: if a candidate phase would touch BOTH backend (.py, .rs, .go, .java, server-side .ts/.js, SQL, protobuf, etc.) AND frontend (.tsx, .jsx, .vue, .svelte, .css, .scss), split it into two phases — one BE, one FE — with an explicit contract between them (API endpoint shape, request/response schema, event names, data types). Reason: the orchestrator routes BE phases to Codex and FE phases to a Claude subagent; mixed phases cannot be dispatched cleanly.

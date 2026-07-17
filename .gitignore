@@ -4,3 +4,4 @@
 .claude/
 docs/
 docs/plans/*.ledger.json
+.superpowers/

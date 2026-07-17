@@ -58,14 +58,14 @@ This skill produces plans in the YAML-frontmatter + phases format consumed nativ
 Verdict handling (identical to dev-orchestrator Step 2):
 
 - `APPROVED` → commit the plan file separately (`docs(plans): add <slug>`, stage only the plan file, Co-Authored-By trailer). Then proceed to Execution Handoff.
-- `CHANGES_REQUESTED` → triage into the ledger, then resume the Sol writer (`--resume-task <writer-task-id>`, Mode B from `../dev-orchestrator/codex-plan-writer-prompt.md`) with the open ACCEPTED items — revise in place, not rewrite. After the writer returns, dispatch a FRESH Opus reviewer with the follow-up template. Increment counter.
+- `CHANGES_REQUESTED` → run the ledger sequence from `../dev-orchestrator/SKILL.md` Step 2, in order: (a) triage the BLOCKING list, (b) write/update the ledger (see "Authorized Change Ledger" below), (c) resume the Sol writer (`--resume-task <writer-task-id>`, Mode B from `../dev-orchestrator/codex-plan-writer-prompt.md`) with the plan file path, the ledger path, and the open ACCEPTED / PARTIALLY_ACCEPTED items inline — revise in place, not rewrite, (d) after the writer returns, dispatch a FRESH Opus reviewer with the follow-up template. Never resume the writer on the raw BLOCKING list before the ledger exists. Increment counter.
 - Round 4 without APPROVED → escalate to user: plan path + last blocking list + one-sentence disagreement summary. User picks: accept / another round / close.
 
 Anti-pingpong: if the reviewer repeats a blocking point that was explicitly rejected with reasoning in a prior round, mark `resolved-by-decision`, do not loop on it. No-progress: if two consecutive rounds produce an identical blocking list, escalate immediately.
 
 **New-blocker churn detector.** Escalate immediately, even before cap=4, when all prior blockers are closed (per the ledger) and the reviewer returns only NEW `MUST_FIX_NOW` items that don't cite DATA_LOSS / SECURITY / GUARANTEED_FAIL materiality. `REGRESSION_FROM_AUTHORIZED_FIX` items don't count as "new" — they are causally tied to a prior accepted fix. Canonical wording lives in `../dev-orchestrator/SKILL.md` Step 2 verdict-handling; mirror it from there rather than restating.
 
-**Authorized Change Ledger.** For each `CHANGES_REQUESTED` round, the orchestrator constructs the same `docs/plans/<slug>.ledger.json` artifact described in `../dev-orchestrator/SKILL.md` (see "## Authorized Change Ledger" there for shape, lifecycle, and the reviewer-side materiality vocabulary — `MUST_FIX_NOW`, `REGRESSION_FROM_AUTHORIZED_FIX`, `DEFER`, `NIT`, `REJECTED_BY_SCOPE` — alongside the orchestrator-side label `AUTHORIZED_CHANGE_LEDGER`). Pass the ledger path to the Sol writer on the revision resume and to the fresh Opus reviewer each round. The ledger is transient orchestrator state, kept only for the duration of the current Step-2 review loop, and is never committed. The same vocabulary applies to plan-review rounds run from this skill.
+**Authorized Change Ledger.** For each `CHANGES_REQUESTED` round, the orchestrator constructs the same `docs/plans/<slug>.ledger.json` artifact described in `../dev-orchestrator/SKILL.md` (see "## Authorized Change Ledger" there for shape, lifecycle, and the reviewer-side materiality vocabulary — `MUST_FIX_NOW`, `REGRESSION_FROM_AUTHORIZED_FIX`, `DEFER`, `NIT`, `REJECTED_BY_SCOPE` — alongside the orchestrator-side label `AUTHORIZED_CHANGE_LEDGER`). Pass the ledger path to the Sol writer on the revision resume and to the fresh Opus reviewer each round. The ledger is transient orchestrator state — never staged, never committed — but it is NOT deleted when this skill's review loop ends: it survives `APPROVED` and is handed to `dev-orchestrator`, whose Step 4 and Step 5 loops share the same file; only plan archival (Step 5 `REVIEW_OK`) or abandonment deletes it (see "Where it lives" under "## Authorized Change Ledger" in `../dev-orchestrator/SKILL.md`). The same vocabulary applies to plan-review rounds run from this skill.
 
 ## Scope Check
 
@@ -125,7 +125,7 @@ phases:
 
 After the `---` separator the body begins, starting with `## Goal` and following the H2 sequence below. Do NOT add `**Goal:**` / `**Architecture:**` / `**Tech Stack:**` bold lines before the H2 sections — those are upstream mini-header conventions and would duplicate `## Goal`.
 
-The first phase MUST start at `status: in-progress`; all others at `status: pending`. The top-level `status: in-progress` until the last phase flips to `done`. These fields are what `dev-orchestrator` reads during resume-check and auto-commit — keep them well-formed.
+The first phase MUST start at `status: in-progress`; all others at `status: pending`. The top-level `status: in-progress` until the last phase flips to `done`. These fields are what `dev-orchestrator` reads during resume-check and auto-commit — keep them well-formed. On phase completion the orchestrator appends a `commits:` range field (`"<base7>.."` on the sequential path, `"<base7>..<head7>"` for parallel groups) to that phase's `phases[]` entry — a runtime field written by the orchestrator, never by the plan author; do not emit it when writing the plan.
 
 ## Required body sections
 
@@ -134,6 +134,7 @@ After the YAML frontmatter and the `# [Feature Name] Implementation Plan` title,
 1. `## Goal` — what this enables and why now. Two short paragraphs max.
 1a. `## Acceptance criteria` — 3–7 externally observable criteria that define "done" for the whole plan. Reviewers may block ONLY on these criteria, stated user requirements, repo constraints, or high-materiality risks (`DATA_LOSS`, `SECURITY`, `GUARANTEED_FAIL`, `REGRESSION`, `ACCEPTANCE_CRITERIA`).
 1b. `## Non-goals / deferred` — explicit exclusions. Reviewers MUST classify requests for these as `REJECTED_BY_SCOPE` or `DEFER` unless the orchestrator authorizes scope expansion.
+1c. `## Global Constraints` — the spec's project-wide requirements — version floors, dependency limits, naming and copy rules, platform requirements — one line each, with exact values copied verbatim from the spec or user request. Every phase's requirements implicitly include this section. If the spec imposes none, write literally `None declared in the spec.` Do NOT merge into `## Contracts`: Contracts define interfaces between phases; Global Constraints are external requirements binding the whole plan.
 2. `## Files` — paths to create/modify, grouped by phase. Each file: one-line responsibility (see "## File Structure" guidance above).
 3. `## Contracts` — function signatures, data shapes, API surface. Exact enough that the implementer can build without guessing.
 4. `## Test strategy` — what proves correctness, per phase. Test types (unit/integration/e2e), key cases, what NOT to test.
@@ -150,6 +151,7 @@ Self-Review (see below) is a check the plan writer runs in-process while writing
 
 - Each phase must be independently commit-able and produce a working system (no "Ф1 breaks build, Ф2 fixes it").
 - Each phase should be shippable in one implementer run (roughly a few files, a few hours of work).
+- **Right-sizing (lower bound)**: a phase is the smallest unit that carries its own test cycle and is worth a fresh reviewer's gate. When drawing phase boundaries: fold setup, configuration, scaffolding, and documentation steps into the phase whose deliverable needs them; split only where a reviewer could meaningfully reject one phase while approving its neighbor. Each phase ends with an independently testable deliverable.
 - Prefer 2–5 phases. More than 5 is a signal to split into multiple plans.
 - Put risky / blocking decisions as early as possible so later phases can assume they're settled.
 - **Backend / frontend split (required for full-stack work)**: if a candidate phase would touch BOTH backend (.py, .rs, .go, .java, server-side .ts/.js, SQL, protobuf, etc.) AND frontend (.tsx, .jsx, .vue, .svelte, .css, .scss), split it into two phases — one BE, one FE — with an explicit contract between them. Reason: `dev-orchestrator` routes BE phases to Codex and FE phases to a Claude subagent; mixed phases cannot be dispatched cleanly.
@@ -157,7 +159,7 @@ Self-Review (see below) is a check the plan writer runs in-process while writing
 
 ### Per-phase layout
 
-Each phase is an H2 (`## Ф1: <title>`) inside the `## Phases` section. Inside the phase, list bite-sized TDD steps as checkboxes. A phase may contain multiple `test → impl → pass` cycles before its final commit, but it must still ship in one implementer run.
+Each phase is an H2 (`## Ф1: <title>`) inside the `## Phases` section. Every phase opens with a `**Files in this phase:**` list followed by an `**Interfaces:**` block. The `**Interfaces:**` block is mandatory in EVERY phase — an empty side is written explicitly as `nothing`, never omitted. It matters most for `parallel_group` phases (built concurrently — neighbors' code is invisible until merge) and for BE/FE pairs building to one contract, and it gives reviewers a mechanical cross-phase consistency check. Inside the phase, list bite-sized TDD steps as checkboxes. A phase may contain multiple `test → impl → pass` cycles before its final commit, but it must still ship in one implementer run.
 
 ````markdown
 ## Ф1: [Phase Name]
@@ -166,6 +168,10 @@ Each phase is an H2 (`## Ф1: <title>`) inside the `## Phases` section. Inside t
 - Create: `exact/path/to/file.py`
 - Modify: `exact/path/to/existing.py:123-145`
 - Test: `tests/exact/path/to/test.py`
+
+**Interfaces:**
+- Consumes: [what this phase uses from earlier phases — exact signatures. If nothing, write literally `nothing`]
+- Produces: [what later phases rely on — exact function names, parameter and return types. If nothing, write literally `nothing`]
 
 - [ ] **Step 1: Write the failing test**
 
@@ -224,7 +230,7 @@ The plan writer runs this self-review inline while writing the plan — include 
 
 **2. Placeholder scan:** Search your plan for red flags — any of the patterns from the "No Placeholders" section above. Fix them.
 
-**3. Type consistency:** Do the types, method signatures, and property names you used in later phases match what you defined in earlier phases? A function called `clearLayers()` in Ф1 but `clearFullLayers()` in Ф3 is a bug.
+**3. Type consistency:** Do the types, method signatures, and property names you used in later phases match what you defined in earlier phases? A function called `clearLayers()` in Ф1 but `clearFullLayers()` in Ф3 is a bug. Mechanical check: every `Consumes:` line in a phase's `**Interfaces:**` block MUST string-match a `Produces:` line of an earlier phase or a line in `## Contracts`. A `Consumes:` entry that matches neither is a plan bug — fix the name/signature mismatch; do not delete the line. Exception: lines reading literally `Consumes: nothing` / `Produces: nothing` are the explicit empty marker — exempt from this check, not a bug.
 
 **4. Acceptance-criteria coverage:** does every phase produce something observable in the `## Acceptance criteria` list? Are `## Non-goals / deferred` entries explicit enough that a reviewer would classify a scope-expansion request as `REJECTED_BY_SCOPE`?
 

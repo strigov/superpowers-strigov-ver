@@ -34,7 +34,7 @@ Single-file change, <20 lines, no architectural judgment?
   NO  → Full protocol
 ```
 
-### Full protocol (5 steps)
+### Full protocol (6 steps)
 
 ```
 Step 1  Codex Sol max writes a plan  (--write)
@@ -60,7 +60,11 @@ Step 3.5  Verification gate  (Sonnet subagent; re-runs after every fix round)
            GATE_FAIL → back to implementer (doesn't consume a review round; cap=2)
 
 Step 4  Fused review  (loop, cap=4)
-        ├─ 4.1  Opus reviews: spec compliance first, then quality
+        ├─ 4.0  Review package built per round (bin/review-package):
+        │        commit list + stat + full -U10 diff in one file —
+        │        reviewers read the package, never re-run git
+        ├─ 4.1  Opus reviews: spec + quality, both every round
+        │        Inputs: package + implementer's file-based report + Global Constraints
         │        REVIEW_OK → trigger 4.2
         │        REVIEW_BLOCKING → back to the fixer with fix list
         └─ 4.2  Codex Sol xhigh control review (only if 4.1 passed)
@@ -72,19 +76,26 @@ Step 4.5  Review synthesis  (only when the loop took 2+ rounds)
         └─ Sonnet subagent consolidates ledger + final verdicts into
            docs/reviews/<slug>-<phase>.md — the archival review record
 
-Step 5  Auto-commit
+Auto-commit (per phase, after a clean fused review)
         └─ Updates plan frontmatter (phase status: done → next: in-progress)
            Stages phase files + plan + review synthesis (when produced)
            Conventional-commit subject, why-focused body
            Co-Authored-By trailer
            Never git push without explicit user approval
+
+Step 5  Final whole-branch review  (once per plan, cap=2)
+        └─ After the last phase lands, before plan archival:
+           one Opus pass over the entire MERGE_BASE..HEAD diff —
+           cross-phase integration, architecture, full suite + typecheck,
+           triage of all deferred ledger items
+           REVIEW_OK → archive plan   BLOCKING → ONE Luna fix wave → round 2
 ```
 
 All Codex resumes are **thread-addressed** (`--resume-task <task-id>`, a local extension of the vendored companion): each role — plan writer, implementer — continues exactly its own thread, no matter what ran in between. Claude-side reviews (plan review, 4.1) and the Step 4 control review are fresh each round by design: an independent reviewer must not anchor on its own prior rounds.
 
 ### Multi-phase plans
 
-A plan can have multiple phases (Ф1, Ф2, Ф3…). Steps 1 and 2 cover **all phases at once** upfront. Steps 3–5 run **per phase** with no confirmation prompts between them — the plan was already approved.
+A plan can have multiple phases (Ф1, Ф2, Ф3…). Steps 1 and 2 cover **all phases at once** upfront. Steps 3–4.5 + auto-commit run **per phase** with no confirmation prompts between them — the plan was already approved. Step 5 runs once, after the last phase.
 
 ### Resume across sessions
 
