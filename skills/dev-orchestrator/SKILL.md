@@ -133,7 +133,7 @@ Never infer a verdict from prose, and never treat a missing token as approval �
 - **Fable subagent** — top-tier judgment, escalation only (never the per-round default — it draws from the Max plan's 50% weekly Fable budget): Step 4.1 review when the phase carries SECURITY / DATA_LOSS materiality risks (auth, payments, destructive migrations — per the plan's Risks section) or when the fused loop reaches round 3+; BLOCKED diagnosis; escalation impasse summaries. Same Agent dispatch with `model: "fable"`, `ultrathink` first line. **Fallback rule**: if Fable is unavailable (weekly cap) or its classifier visibly falls back, use Opus and TELL THE USER — never a silent substitution.
 - **Codex Sol xhigh** (`--model gpt-5.6-sol --effort xhigh`, no `--write`) — Step 4.2: control review on the diff after Opus review returned clean.
 - **Codex Luna max** (`--model gpt-5.6-luna --effort max`, always `--write`) — Step 3 implementation for **non-frontend** phases, Step 4 fix rounds, and the Step 5 fix wave.
-- **Codex Terra xhigh** (`--model gpt-5.6-terra --effort xhigh`) — reasoning escalation: resume the implementer thread at Terra when Luna reports BLOCKED and Opus diagnosis says "needs more reasoning".
+- **Codex Terra xhigh** (`--model gpt-5.6-terra --effort xhigh`) — reasoning escalation: resume the implementer thread at Terra when Luna reports BLOCKED and the Fable diagnosis says "needs more reasoning".
 - **Claude frontend implementer subagent** — Step 3 for frontend-only phases. Opus for new UI / redesigns (prompt starts with `ultrathink`), Sonnet for simple tweaks. Subagent is instructed to use the `frontend-design` skill. See `./claude-frontend-implementer-prompt.md`.
 - **Sonnet quickfix subagent** — trivial path only.
 
@@ -309,7 +309,7 @@ Implementer status (same shape from both paths):
 - `BLOCKED` — dispatch a Fable subagent to assess (`model: "fable"`, `ultrathink`; Opus fallback per the Model split rule; pass BLOCKED report + plan-file path). The diagnosis returns one of:
     1. More context needed → re-dispatch implementer with added context, same effort.
     2. Needs more reasoning → Codex path: re-dispatch with `--resume-task <implementer-task-id>` at Terra xhigh (`--model gpt-5.6-terra --effort xhigh`). Claude path: upgrade from Sonnet to Opus (with `ultrathink`); if already Opus, hand back to user.
-    3. Task too large → break into sub-phases; dispatch Opus to edit the plan accordingly, re-run Step 2 on the plan change.
+    3. Task too large → break into sub-phases; dispatch the plan writer (Codex Sol max, `--resume-task <plan-writer-task-id>`, Mode B) to edit the plan accordingly, re-run Step 2 on the plan change.
     4. Plan is wrong → escalate to user.
 
 Never force the same model to retry without changes.
