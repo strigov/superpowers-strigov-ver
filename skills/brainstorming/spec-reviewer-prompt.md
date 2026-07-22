@@ -1,6 +1,6 @@
 # Spec Reviewer Prompt (Codex xhigh)
 
-Use when dispatching a design spec review to Codex xhigh after Opus writes the spec.
+Use when dispatching a design spec review to Codex Sol xhigh after Fable writes the spec (cross-family: Claude writes, OpenAI reviews).
 
 ## Invocation
 

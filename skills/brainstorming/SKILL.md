@@ -17,15 +17,17 @@ Do NOT invoke any implementation skill, write any code, scaffold any project, or
 
 You are the ORCHESTRATOR on the main thread. You drive the interactive dialogue — exploring context, asking clarifying questions one at a time, presenting design sections, getting approval, and transitioning to writing-plans.
 
-**Opus is invoked as a subagent for judgment work:**
+**Fable is invoked as a subagent for judgment work:**
 - Proposing 2-3 approaches with trade-offs and a recommendation (checklist step 4).
 - Writing the final design doc and running the spec self-review (checklist steps 6-7).
 
-Dispatch via `Agent(subagent_type="general-purpose", model="opus", prompt=...)`. **The prompt MUST begin with the literal keyword `ultrathink` on its own first line (before anything else) to run Opus at max thinking effort.** The subagent has NO session context — the prompt must be fully self-contained (include the user's original request, the collected Q&A, project context you gathered, any constraints).
+Dispatch via `Agent(subagent_type="general-purpose", model="fable", prompt=...)`. **The prompt MUST begin with the literal keyword `ultrathink` on its own first line (before anything else) to run Fable at max thinking effort.** The subagent has NO session context — the prompt must be fully self-contained (include the user's original request, the collected Q&A, project context you gathered, any constraints).
 
-The main thread never writes the spec directly — dispatch Opus. Exception: the main thread runs `git add` / `git commit` after Codex xhigh returns APPROVED (mechanical orchestrator work — see "Codex xhigh Spec Review" below).
+**Fable fallback rule**: Fable 5 is part of the Max plan at up to 50% of weekly usage limits, and its safety classifier occasionally falls back to Opus 4.8 on its own. If a Fable dispatch is unavailable (cap reached) or visibly downgraded, re-dispatch with `model="opus"` and TELL THE USER the spec was written by Opus, not Fable — never silently.
 
-**Codex xhigh is invoked for spec review** (loop cap=4) after Opus finishes writing. Dispatched via `companion.mjs --background` per the `codex-invocation` skill — standard Agent paths auto-reject on this machine. See "Codex xhigh Spec Review" below for the loop procedure.
+The main thread never writes the spec directly — dispatch Fable. Exception: the main thread runs `git add` / `git commit` after Codex xhigh returns APPROVED (mechanical orchestrator work — see "Codex xhigh Spec Review" below).
+
+**Codex xhigh is invoked for spec review** (loop cap=4) after Fable finishes writing. Dispatched via `companion.mjs --background` per the `codex-invocation` skill — standard Agent paths auto-reject on this machine. See "Codex xhigh Spec Review" below for the loop procedure.
 
 ## Anti-Pattern: "This Is Too Simple To Need A Design"
 
@@ -38,11 +40,11 @@ You MUST create a task for each of these items and complete them in order:
 1. **Explore project context** — check files, docs, recent commits
 2. **Offer visual companion** (if topic will involve visual questions) — this is its own message, not combined with a clarifying question. See the Visual Companion section below.
 3. **Ask clarifying questions** — one at a time, understand purpose/constraints/success criteria
-4. **Propose 2-3 approaches** — dispatch Opus subagent; present its options with trade-offs and recommendation
+4. **Propose 2-3 approaches** — dispatch Fable subagent; present its options with trade-offs and recommendation
 5. **Present design** — in sections scaled to their complexity, get user approval after each section
-6. **Write design doc** — dispatch Opus subagent to write `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
-7. **Spec self-review** — Opus runs this inline while writing the spec (placeholders, contradictions, ambiguity, scope — see below)
-8. **Codex xhigh reviews spec** — loop cap=4, using `./spec-reviewer-prompt.md`; if CHANGES_REQUESTED, dispatch Opus to revise then Codex re-reviews; after APPROVED, commit from main thread
+6. **Write design doc** — dispatch Fable subagent to write `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
+7. **Spec self-review** — Fable runs this inline while writing the spec (placeholders, contradictions, ambiguity, scope — see below)
+8. **Codex xhigh reviews spec** — loop cap=4, using `./spec-reviewer-prompt.md`; if CHANGES_REQUESTED, dispatch Fable to revise then Codex re-reviews; after APPROVED, commit from main thread
 9. **User reviews written spec** — ask user to review the spec file before proceeding
 10. **Transition to implementation** — invoke writing-plans skill to create implementation plan
 
@@ -54,7 +56,7 @@ Before sending EACH message while this skill is active, verify — and rewrite t
 2. **At most ONE question in this message.** Count the question marks — two or more questions means rewrite into one.
 3. **Visual Companion offer is alone.** If this message offers the companion, it contains nothing else.
 4. **HARD-GATE intact.** No code, no file edits, no scaffolding, no implementation-skill invocation before the user approved the design.
-5. **Opus output is presented, not dumped.** If this message relays subagent results, it is conversational and leads with the recommendation.
+5. **Fable output is presented, not dumped.** If this message relays subagent results, it is conversational and leads with the recommendation.
 
 ## Process Flow
 
@@ -67,8 +69,8 @@ digraph brainstorming {
     "Propose 2-3 approaches" [shape=box];
     "Present design sections" [shape=box];
     "User approves design?" [shape=diamond];
-    "Write design doc\n(Opus subagent)" [shape=box];
-    "Spec self-review\n(Opus inline)" [shape=box];
+    "Write design doc\n(Fable subagent)" [shape=box];
+    "Spec self-review\n(Fable inline)" [shape=box];
     "Codex xhigh reviews spec\n(loop cap=4)" [shape=box];
     "Codex approved?" [shape=diamond];
     "Commit spec" [shape=box];
@@ -83,14 +85,14 @@ digraph brainstorming {
     "Propose 2-3 approaches" -> "Present design sections";
     "Present design sections" -> "User approves design?";
     "User approves design?" -> "Present design sections" [label="no, revise"];
-    "User approves design?" -> "Write design doc\n(Opus subagent)" [label="yes"];
-    "Write design doc\n(Opus subagent)" -> "Spec self-review\n(Opus inline)";
-    "Spec self-review\n(Opus inline)" -> "Codex xhigh reviews spec\n(loop cap=4)";
+    "User approves design?" -> "Write design doc\n(Fable subagent)" [label="yes"];
+    "Write design doc\n(Fable subagent)" -> "Spec self-review\n(Fable inline)";
+    "Spec self-review\n(Fable inline)" -> "Codex xhigh reviews spec\n(loop cap=4)";
     "Codex xhigh reviews spec\n(loop cap=4)" -> "Codex approved?" ;
-    "Codex approved?" -> "Write design doc\n(Opus subagent)" [label="CHANGES_REQUESTED\n(Opus revises, re-review)"];
+    "Codex approved?" -> "Write design doc\n(Fable subagent)" [label="CHANGES_REQUESTED\n(Fable revises, re-review)"];
     "Codex approved?" -> "Commit spec" [label="APPROVED"];
     "Commit spec" -> "User reviews spec?";
-    "User reviews spec?" -> "Write design doc\n(Opus subagent)" [label="changes requested"];
+    "User reviews spec?" -> "Write design doc\n(Fable subagent)" [label="changes requested"];
     "User reviews spec?" -> "Invoke writing-plans skill" [label="approved"];
 }
 ```
@@ -109,9 +111,9 @@ digraph brainstorming {
 - Only one question per message - if a topic needs more exploration, break it into multiple questions
 - Focus on understanding: purpose, constraints, success criteria
 
-**Exploring approaches (delegate to Opus):**
+**Exploring approaches (delegate to Fable):**
 
-Dispatch Opus subagent with a self-contained prompt. **The prompt MUST begin with the literal word `ultrathink` on its own first line (before anything else) to run Opus at max thinking effort.** Then include:
+Dispatch Fable subagent with a self-contained prompt. **The prompt MUST begin with the literal word `ultrathink` on its own first line (before anything else) to run Fable at max thinking effort.** Then include:
 - The user's original request (verbatim)
 - Project context you collected (relevant files, docs, recent commits)
 - Full Q&A from clarifying questions
@@ -141,7 +143,7 @@ Q: ... → A: ...
 Return: for each approach — a name, 2-3 sentence description, pros, cons, and when it wins. Mark your recommended option first and explain the recommendation.
 ```
 
-When Opus returns, present the options to the user conversationally — don't dump the subagent's output verbatim. Lead with Opus's recommendation and reasoning. You may paraphrase for fit with the ongoing dialogue, but do not invent options Opus didn't propose.
+When Fable returns, present the options to the user conversationally — don't dump the subagent's output verbatim. Lead with Fable's recommendation and reasoning. You may paraphrase for fit with the ongoing dialogue, but do not invent options Fable didn't propose.
 
 **Presenting the design:**
 
@@ -166,9 +168,9 @@ When Opus returns, present the options to the user conversationally — don't du
 
 ## After the Design
 
-**Documentation (delegate to Opus):**
+**Documentation (delegate to Fable):**
 
-Dispatch Opus subagent with a self-contained prompt. **The prompt MUST begin with the literal word `ultrathink` on its own first line (before anything else) to run Opus at max thinking effort.** Then include:
+Dispatch Fable subagent with a self-contained prompt. **The prompt MUST begin with the literal word `ultrathink` on its own first line (before anything else) to run Fable at max thinking effort.** Then include:
 - The user's original request and any constraints
 - The full approved design (all sections from the dialogue, verbatim as the user approved)
 - Target path: `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` (user preferences for spec location override this default)
@@ -206,24 +208,24 @@ If the elements-of-style:writing-clearly-and-concisely skill is available, use i
 Return: the spec file path + one-paragraph summary of what the spec covers and any decisions you made where the design was ambiguous.
 ```
 
-Opus writes the file directly (general-purpose agent has Write/Edit tools). After Opus returns, do NOT commit yet — first run Codex xhigh spec review (see below).
+Fable writes the file directly (general-purpose agent has Write/Edit tools). After Fable returns, do NOT commit yet — first run Codex xhigh spec review (see below).
 
 **Spec Self-Review (already embedded in the skeleton above — keep it when editing the prompt):**
 
-Instruct Opus: "After writing the spec, review it with fresh eyes and fix inline. No need to re-review — just fix and move on:
+Instruct Fable: "After writing the spec, review it with fresh eyes and fix inline. No need to re-review — just fix and move on:
 
 1. **Placeholder scan:** Any 'TBD', 'TODO', incomplete sections, or vague requirements? Fix them.
 2. **Internal consistency:** Do any sections contradict each other? Does the architecture match the feature descriptions?
 3. **Scope check:** Is this focused enough for a single implementation plan, or does it need decomposition?
 4. **Ambiguity check:** Could any requirement be interpreted two different ways? If so, pick one and make it explicit."
 
-**Codex xhigh Spec Review (after Opus returns):**
+**Codex xhigh Spec Review (after Fable returns):**
 
 Dispatch Codex xhigh using `./spec-reviewer-prompt.md`. Read-only, no `--write`. Loop cap=4.
 
 Verdict handling:
 - `APPROVED` → commit the spec file from main thread (`git add <path>` + `git commit` with subject `docs(specs): add <topic>`, Co-Authored-By trailer). Then User Review Gate.
-- `CHANGES_REQUESTED` → dispatch Opus subagent again (revision mode) with the BLOCKING list, passing the spec file path. After Opus revises, re-run Codex with `--resume-task <task id of the previous review round>`. Increment counter.
+- `CHANGES_REQUESTED` → dispatch Fable subagent again (revision mode) with the BLOCKING list, passing the spec file path. After Fable revises, re-run Codex with `--resume-task <task id of the previous review round>`. Increment counter.
 - Round 4 without APPROVED → escalate to user: spec path + last blocking list + one-sentence disagreement summary. User picks: accept / another round / close.
 
 Anti-pingpong and no-progress rules same as dev-orchestrator Step 2.
