@@ -48,7 +48,7 @@ Both rules are **model-independent**. Opus on main does NOT get an exception to 
 
 ### Pre-flight gate (applies until you've dispatched a plan-writer/Opus/Explore/quickfix subagent)
 
-Every tool call in this skill — **not just the literal first one** — must be one of the list below, until you have dispatched the Codex plan writer, an Opus review/diagnosis subagent, an Explore subagent, or a Sonnet quickfix subagent for the current task. "Gate passed" is a state unlocked by *that dispatch*, not by the fact that one turn has already happened in the skill. On the confirmed-resume path ("Before Step 1" item 4 — the user confirmed continuing an in-progress, already-approved plan) the first implementer dispatch (`"$DISPATCH" task` or the Claude implementer Agent call) disarms the gate the same way — resuming skips Steps 1–2, so no plan-writer/Opus/Explore dispatch may ever come; and a write task already running for the current phase, found via `"$DISPATCH" status` after a compaction or session break, counts as that dispatch — the gate is passed, keep polling it.
+Every tool call in this skill — **not just the literal first one** — must be one of the list below, until you have dispatched the Codex plan writer, an Opus review subagent, a Fable diagnosis subagent (or its explicit Opus fallback), an Explore subagent, or a Sonnet quickfix subagent for the current task. "Gate passed" is a state unlocked by *that dispatch*, not by the fact that one turn has already happened in the skill. On the confirmed-resume path ("Before Step 1" item 4 — the user confirmed continuing an in-progress, already-approved plan) the first implementer dispatch (`"$DISPATCH" task` or the Claude implementer Agent call) disarms the gate the same way — resuming skips Steps 1–2, so no plan-writer/reviewer/diagnosis/Explore dispatch may ever come; and a write task already running for the current phase, found via `"$DISPATCH" status` after a compaction or session break, counts as that dispatch — the gate is passed, keep polling it.
 
 Specifically: if the user activated `/dev` with no task and you answered "what should I implement?", the gate is still armed. When the task arrives in the next user message, treat it as your first real action in the skill — the gate fires again from scratch. Same thing if any number of clarifying turns happen before the actual task lands. A plain text reply is not a "first tool call" that spends the gate.
 
@@ -84,7 +84,7 @@ The density of the user's message is a signal to dispatch the plan writer **hard
 
 ## Role
 
-Your only jobs, in order: triage → resume-check → dispatch → poll → collect verdicts → bookkeeping (git + plan frontmatter) → transition to next phase → report. Judgment work (planning, reviewing, diagnosing `BLOCKED`) is delegated to subagents — the Codex Sol plan writer and the Opus reviewers — not done on main.
+Your only jobs, in order: triage → resume-check → dispatch → poll → collect verdicts → bookkeeping (git + plan frontmatter) → transition to next phase → report. Judgment work (planning, reviewing, diagnosing `BLOCKED`) is delegated to subagents — the Codex Sol plan writer, Opus/Fable reviewers, and the Fable diagnosis subagent with explicit Opus fallback — not done on main.
 
 ## Protocol state line (every turn)
 
@@ -596,7 +596,7 @@ In Phase Ф1 the ledger is documented and produced, but its `materiality` field 
 
 - **Write production code, tests, or any source edit on the main thread** (Rule 1 at the top — repeated here because it's the one that gets broken). If you are reasoning towards "but this file is tiny / I already understand it / it's just the test part" — STOP and dispatch a subagent.
 - **Do research on main** — `Read`/`Grep` on source, running `pytest` / linters / build scripts, reading plan body beyond frontmatter (Rule 2). If you are reasoning towards "but I just need to see what's failing / what the current code looks like / what this error means" — STOP and dispatch Explore.
-- Do architectural judgment (plans, reviews, BLOCKED diagnosis) on main — always dispatch the plan writer or an Opus subagent.
+- Do architectural judgment (plans, reviews, BLOCKED diagnosis) on main — dispatch the plan writer, the appropriate Opus/Fable reviewer, or the Fable diagnosis subagent with explicit Opus fallback.
 - Offer, suggest, or default to `--effort ultra` — ultra is exclusively user-initiated. If the user didn't say "ultra", it does not exist.
 - `Agent(subagent_type="codex:codex-rescue", ...)` or `Bash("codex exec ...")` — both silently auto-reject.
 - `--resume-last` anywhere in this protocol — positional resume lands in whatever thread happens to be newest, regardless of role. All resumes are `--resume-task <task-id>` against the SAME role's prior dispatch; a wrong resume poisons the thread with another role's instructions. Control review rounds 2+ stay FRESH by design.

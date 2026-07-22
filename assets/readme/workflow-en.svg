@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
+  <title id="title">Delivery protocol</title>
+  <desc id="desc">Six-stage delivery sequence: plan, review, implement, verify, fused review, and whole-branch review, with bounded fix loops and durable artifacts.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0C1223"/>
+      <stop offset="1" stop-color="#10172C"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#5A688F"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="520" rx="26" fill="url(#bg)"/>
+  <text x="54" y="54" fill="#F4F6FF" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="38" font-weight="730">One request. Six gates. Durable proof.</text>
+  <text x="54" y="84" fill="#929DBB" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">EVERY HANDOFF LEAVES AN ARTIFACT · EVERY LOOP HAS A CAP · THE USER KEEPS AUTHORITY</text>
+
+  <path d="M204 228H232M390 228H418M576 228H604M762 228H790M948 228H976" stroke="#5A688F" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">
+    <g transform="translate(46 132)">
+      <rect width="158" height="192" rx="18" fill="#131B32" stroke="#475477"/>
+      <text x="20" y="34" fill="#7C8CFF" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">01 / SOL</text>
+      <text x="20" y="74" fill="#F5F7FF" font-size="25" font-weight="700">Plan</text>
+      <text x="20" y="105" fill="#AEB7D0" font-size="17">scope</text>
+      <text x="20" y="129" fill="#AEB7D0" font-size="17">interfaces</text>
+      <text x="20" y="153" fill="#AEB7D0" font-size="17">risks</text>
+      <path d="M20 168H138" stroke="#2F3A59"/>
+      <text x="20" y="186" fill="#6F7C9E" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">PLAN.MD</text>
+    </g>
+
+    <g transform="translate(232 132)">
+      <rect width="158" height="192" rx="18" fill="#131B32" stroke="#475477"/>
+      <text x="20" y="34" fill="#7C8CFF" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">02 / OPUS</text>
+      <text x="20" y="74" fill="#F5F7FF" font-size="25" font-weight="700">Challenge</text>
+      <text x="20" y="105" fill="#AEB7D0" font-size="17">gaps</text>
+      <text x="20" y="129" fill="#AEB7D0" font-size="17">contracts</text>
+      <text x="20" y="153" fill="#AEB7D0" font-size="17">materiality</text>
+      <path d="M20 168H138" stroke="#2F3A59"/>
+      <text x="20" y="186" fill="#6F7C9E" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">LEDGER</text>
+    </g>
+
+    <g transform="translate(418 132)">
+      <rect width="158" height="192" rx="18" fill="#131B32" stroke="#475477"/>
+      <text x="20" y="34" fill="#7C8CFF" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">03 / LUNA</text>
+      <text x="20" y="74" fill="#F5F7FF" font-size="25" font-weight="700">Build</text>
+      <text x="20" y="105" fill="#AEB7D0" font-size="17">one phase</text>
+      <text x="20" y="129" fill="#AEB7D0" font-size="17">tests</text>
+      <text x="20" y="153" fill="#AEB7D0" font-size="17">report</text>
+      <path d="M20 168H138" stroke="#2F3A59"/>
+      <text x="20" y="186" fill="#6F7C9E" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">DIFF + REPORT</text>
+    </g>
+
+    <g transform="translate(604 132)">
+      <rect width="158" height="192" rx="18" fill="#112A2A" stroke="#2F7F6C"/>
+      <text x="20" y="34" fill="#4DDEB5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">04 / GATE</text>
+      <text x="20" y="74" fill="#E9FFF7" font-size="25" font-weight="700">Verify</text>
+      <text x="20" y="105" fill="#9FD3C3" font-size="17">lint</text>
+      <text x="20" y="129" fill="#9FD3C3" font-size="17">typecheck</text>
+      <text x="20" y="153" fill="#9FD3C3" font-size="17">tests</text>
+      <path d="M20 168H138" stroke="#285849"/>
+      <text x="20" y="186" fill="#6EA996" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">GATE_OK</text>
+    </g>
+
+    <g transform="translate(790 132)">
+      <rect width="158" height="192" rx="18" fill="#17182F" stroke="#7668A7"/>
+      <text x="20" y="34" fill="#B8ACFF" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">05 / 2 VIEWS</text>
+      <text x="20" y="74" fill="#F7F5FF" font-size="25" font-weight="700">Review</text>
+      <text x="20" y="105" fill="#C0B9D8" font-size="17">Opus / Fable</text>
+      <text x="20" y="129" fill="#C0B9D8" font-size="17">Sol control</text>
+      <text x="20" y="153" fill="#C0B9D8" font-size="17">fix loop ≤ 4</text>
+      <path d="M20 168H138" stroke="#3F395B"/>
+      <text x="20" y="186" fill="#8F86B5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">REVIEW PKG</text>
+    </g>
+
+    <g transform="translate(976 132)">
+      <rect width="178" height="192" rx="18" fill="#241E2B" stroke="#8D6945"/>
+      <text x="20" y="34" fill="#FFBE78" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">06 / OPUS</text>
+      <text x="20" y="74" fill="#FFF8EE" font-size="25" font-weight="700">Merge gate</text>
+      <text x="20" y="105" fill="#D5BEA5" font-size="17">whole branch</text>
+      <text x="20" y="129" fill="#D5BEA5" font-size="17">full suite</text>
+      <text x="20" y="153" fill="#D5BEA5" font-size="17">fix wave ≤ 1</text>
+      <path d="M20 168H158" stroke="#57412E"/>
+      <text x="20" y="186" fill="#A88867" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">MERGE READY</text>
+    </g>
+  </g>
+
+  <path d="M869 342V388H497V342" fill="none" stroke="#7C8CFF" stroke-width="2" stroke-dasharray="6 7" marker-end="url(#arrow)"/>
+  <rect x="551" y="366" width="264" height="44" rx="22" fill="#1B2341" stroke="#4D5C8A"/>
+  <text x="683" y="394" text-anchor="middle" fill="#C8D0E8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">AUTHORIZED FIXES ONLY</text>
+
+  <g transform="translate(46 450)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">
+    <circle cx="7" cy="-5" r="6" fill="#35D6A6"/><text x="24" y="0" fill="#AAB4CF">resumable state</text>
+    <circle cx="200" cy="-5" r="6" fill="#7C8CFF"/><text x="217" y="0" fill="#AAB4CF">independent reviewers</text>
+    <circle cx="462" cy="-5" r="6" fill="#FFB66D"/><text x="479" y="0" fill="#AAB4CF">human escalation</text>
+    <circle cx="680" cy="-5" r="6" fill="#697795"/><text x="697" y="0" fill="#AAB4CF">safe Git boundaries</text>
+  </g>
+</svg>
