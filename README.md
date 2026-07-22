@@ -2,7 +2,7 @@
 
 A Claude Code plugin that replaces the default "Claude does everything" mode with a **structured multi-model development workflow**: Sonnet orchestrates, Opus judges, Codex implements and reviews.
 
-Current repo/plugin version: `0.5.2`.
+Current repo/plugin version: `0.6.1`.
 
 ## The idea
 
@@ -12,7 +12,8 @@ This plugin replaces that with a division of labor matched to what each model is
 
 - **Sonnet** (main thread) — cheap, fast orchestration. Reads output, dispatches next step, polls, does git. Never writes production code.
 - **GPT-5.6 Sol max** (Codex) — plan writing and plan revisions. (`ultra` — Sol's parallel-subagent mode — exists but is used only when the user explicitly asks for it.)
-- **Opus** (subagent, `ultrathink`) — judgment. Reviews the plan, reviews the code (4.1), diagnoses blockers. Gets a clean context every invocation.
+- **Opus** (subagent, `ultrathink`) — judgment default. Reviews the plan, reviews the code (4.1 routine rounds). Gets a clean context every invocation.
+- **Fable 5** (subagent, `ultrathink`) — judgment escalation tier, included in Max plans: writes specs/ADRs in `brainstorming`, takes over 4.1 on SECURITY/DATA_LOSS phases or from round 3 of the fused loop, diagnoses BLOCKED, writes impasse summaries. Falls back to Opus (with an explicit note to the user) when the weekly Fable budget is out.
 - **GPT-5.6 Luna max** (Codex) — implementation and fix rounds. Cheap, strong agentic coder; **GPT-5.6 Terra xhigh** is the reasoning escalation when Luna gets stuck.
 - **GPT-5.6 Sol xhigh** (Codex) — skeptical read-only control review after Opus clears the code (4.2).
 
@@ -52,7 +53,7 @@ Step 3  Codex Luna max implements current phase  (--write)
         └─ DONE → Step 3.5
            DONE_WITH_CONCERNS → Sonnet reads concerns, decides
            NEEDS_CONTEXT → provide context, resume implementer thread (--resume-task)
-           BLOCKED → Opus diagnoses → escalate or add context and retry
+           BLOCKED → Fable diagnoses (Opus fallback) → escalate or add context and retry
 
 Step 3.5  Verification gate  (Sonnet subagent; re-runs after every fix round)
         └─ lint + typecheck + affected tests green BEFORE any review round
@@ -61,6 +62,7 @@ Step 3.5  Verification gate  (Sonnet subagent; re-runs after every fix round)
 
 Step 4  Fused review  (loop, cap=4)
         ├─ 4.1  Opus reviews: spec compliance first, then quality
+        │        (Fable takes over on SECURITY/DATA_LOSS phases or round 3+)
         │        REVIEW_OK → trigger 4.2
         │        REVIEW_BLOCKING → back to the fixer with fix list
         └─ 4.2  Codex Sol xhigh control review (only if 4.1 passed)
@@ -98,7 +100,7 @@ The plan file is the single source of truth. If a session is interrupted, the or
 
 **No-progress detector**: if two consecutive review rounds produce an identical blocking list, the loop escalates immediately instead of running to cap.
 
-**Escalation cap**: 4 rounds without clean review → Opus writes a one-sentence summary of the impasse, user decides: accept / another round / close.
+**Escalation cap**: 4 rounds without clean review → Fable writes a one-sentence summary of the impasse (Opus fallback), user decides: accept / another round / close.
 
 **Auto-commit rules**: never `--no-verify`, never `--amend`. Skips auto-commit if unrelated uncommitted changes exist in the tree. Never pushes without explicit per-session user approval.
 
@@ -117,7 +119,7 @@ Beyond those, `dev-orchestrator`, and `codex-invocation`, the plugin bundles 12 
 
 | Skill | What it does |
 |---|---|
-| `brainstorming` | Interactive visual brainstorm with a local browser companion |
+| `brainstorming` | Interactive visual brainstorm; specs/ADRs written by Fable, reviewed by Codex Sol xhigh |
 | `dispatching-parallel-agents` | Pattern for running independent subagents in parallel |
 | `executing-plans` | Guidance for executing a written plan step by step |
 | `finishing-a-development-branch` | Checklist before merging: tests, coverage, review, PR |
