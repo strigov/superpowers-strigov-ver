@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# Generate a review package: commit list, stat summary, and the net
+# diff with extended context, written to a file the reviewer reads in one
+# call. Using the recorded per-phase BASE (not HEAD~1) keeps multi-commit
+# tasks intact.
+#
+# Two modes:
+#   review-package BASE HEAD [OUTFILE]    — committed range BASE..HEAD
+#   review-package BASE WORKTREE OUTFILE  — working tree against BASE (the
+#     fork's implementers do not commit, so the review reads the working
+#     tree). OUTFILE is required here: an uncommitted diff has no head7, so
+#     the range cannot name the file uniquely — the orchestrator names it
+#     per round.
+#
+# HEAD must not be literally named "WORKTREE" — that word is reserved as the
+# mode keyword and shadows any ref of the same name; pass such a ref's SHA
+# instead.
+#
+# The diff always excludes .superpowers/ (the workspace itself).
+#
+# WORKTREE mode includes untracked files: `git diff <commit>` alone cannot see
+# them, and the fork's implementers neither commit nor stage — without this,
+# every file a phase CREATES would be invisible to the reviewers. Untracked
+# files are registered as intent-to-add in a TEMPORARY copy of the index, so
+# the real index is never touched.
+#
+# Default OUTFILE (range mode only):
+#   <repo-root>/.superpowers/sdd/review-<base7>..<head7>.diff
+# (named per range, so a re-review after fixes gets a distinct fresh file).
+set -euo pipefail
+
+usage() {
+  echo "usage: review-package BASE HEAD [OUTFILE]" >&2
+  echo "       review-package BASE WORKTREE OUTFILE" >&2
+  echo "       (HEAD must not be literally 'WORKTREE' — pass that ref's SHA instead)" >&2
+  exit 2
+}
+
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+  usage
+fi
+
+base=$1
+head=$2
+
+git rev-parse --verify --quiet "$base" >/dev/null || { echo "bad BASE: $base" >&2; exit 2; }
+
+if [ "$head" = "WORKTREE" ]; then
+  [ $# -eq 3 ] || { echo "WORKTREE mode requires OUTFILE (no commit range to name the file from)" >&2; usage; }
+  out=$3
+else
+  git rev-parse --verify --quiet "$head" >/dev/null || { echo "bad HEAD: $head" >&2; exit 2; }
+  if [ $# -eq 3 ]; then
+    out=$3
+  else
+    dir=$("$(cd "$(dirname "$0")" && pwd)/sdd-workspace")
+    out="$dir/review-$(git rev-parse --short "$base")..$(git rev-parse --short "$head").diff"
+  fi
+fi
+
+# The exclude pathspec is cwd-relative; anchor everything at the repo root so
+# :(exclude).superpowers always means the workspace at the root. Resolve a
+# relative OUTFILE against the invocation cwd first.
+case "$out" in
+  /*) ;;
+  *) out="$(pwd)/$out" ;;
+esac
+cd "$(git rev-parse --show-toplevel)"
+
+exclude=':(exclude).superpowers'
+
+mkdir -p "$(dirname "$out")"
+
+if [ "$head" = "WORKTREE" ]; then
+  # Make untracked files visible to `git diff <commit>`: intent-to-add them
+  # in a temporary index copy (the real index stays untouched, nothing is
+  # staged or committed).
+  tmpidx="$(mktemp)"
+  trap 'rm -f "$tmpidx"' EXIT
+  idx="$(git rev-parse --git-path index)"
+  if [ -f "$idx" ]; then
+    cp "$idx" "$tmpidx"
+  fi
+  GIT_INDEX_FILE="$tmpidx" git add --intent-to-add -A -- . "$exclude"
+  {
+    echo "# Review package: ${base}..WORKTREE"
+    echo
+    echo "## Commits"
+    git log --oneline "${base}..HEAD" -- . "$exclude"
+    echo "plus uncommitted working-tree changes"
+    echo
+    echo "## Files changed"
+    GIT_INDEX_FILE="$tmpidx" git diff --stat "$base" -- "$exclude"
+    echo
+    echo "## Diff"
+    GIT_INDEX_FILE="$tmpidx" git diff -U10 "$base" -- "$exclude"
+  } > "$out"
+  commits=$(git rev-list --count "${base}..HEAD" -- . "$exclude")
+else
+  {
+    echo "# Review package: ${base}..${head}"
+    echo
+    echo "## Commits"
+    git log --oneline "${base}..${head}" -- . "$exclude"
+    echo
+    echo "## Files changed"
+    git diff --stat "${base}..${head}" -- "$exclude"
+    echo
+    echo "## Diff"
+    git diff -U10 "${base}..${head}" -- "$exclude"
+  } > "$out"
+  commits=$(git rev-list --count "${base}..${head}" -- . "$exclude")
+fi
+
+# bash 3.2 does not trip `set -e` on a failed compound-command redirect —
+# verify the package actually landed before printing the success line.
+[ -s "$out" ] || { echo "failed to write $out" >&2; exit 1; }
+
+echo "wrote ${out}: ${commits} commit(s), $(wc -c < "$out" | tr -d ' ') bytes"

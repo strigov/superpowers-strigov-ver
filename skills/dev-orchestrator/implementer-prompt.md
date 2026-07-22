@@ -16,6 +16,8 @@ Use when dispatching implementation to the Codex implementer (Luna max). Reasoni
 
 `$DISPATCH` is the `codex-dispatch` wrapper — resolve it once per session per the `codex-invocation` skill. Write the filled prompt to a scratch file first and pass it via `--prompt-file` — do not inline multi-line text. For a parallel-track phase, add `--cwd <worktree-path>` so Codex works in that track's worktree (and use the same `--cwd` on `status`/`result`).
 
+Both templates take a `[REPORT_FILE]` placeholder — the implementer writes its full report there so the detail never transits your context. Resolve it once per phase as `$(sdd-workspace <plan-file>)/phase-<id>-report.md` and substitute the absolute path (`sdd-workspace` resolves the same way as `$DISPATCH` — see SKILL.md). For a parallel-track phase, run `sdd-workspace` inside the track's worktree so the report lands in that track's workspace. Fix rounds append to the same file — never mint a new report path for round 2+.
+
 For follow-up rounds after the fused review (Step 4), resume the implementer's own thread: same flags plus `--resume-task <this phase's implementer task id>`, with the fix-round template below (it carries the authorized blockers; the thread already knows the plan and the phase). Thread-addressed resume is safe even though the control reviewer ran in between — see `codex-invocation` "Resume semantics". Never `--resume-last`. The same `--resume-task` id also serves `NEEDS_CONTEXT` / effort-upgrade re-dispatches in Step 3.
 
 **Fresh fallback**: if the implementer thread is unavailable (phase implemented by a Claude subagent, task id lost, stale job record forcing `--fresh`), prepend the re-brief block from the template's "fresh fallback" note so the new session has full context.
@@ -56,6 +58,7 @@ Do not guess.
 2. Write tests that verify behavior (not that mirror the implementation).
 3. Run tests / typecheck / linters; confirm they pass.
 4. Self-review (see below) and fix issues before reporting.
+5. Write your full report to [REPORT_FILE], then emit the short final message (see Report format below).
 
 ## Discipline
 
@@ -86,16 +89,27 @@ STOP and escalate (`BLOCKED`) when:
 
 ## Report format (strict)
 
-Emit one report at the end. Line 1 is the bare status token — no preamble, no markdown formatting:
+Write your full report to [REPORT_FILE]:
+- What you implemented (or what you attempted, if blocked)
+- What you tested and test results (commands + output summary)
+- TDD Evidence (if TDD was required for this phase):
+  - RED: command run, relevant failing output before implementation, and why the failure was expected
+  - GREEN: command run and relevant passing output after implementation
+- Files changed (paths)
+- Self-review findings (if any)
+- Concerns / questions / blockers (if status ≠ DONE)
+
+Then emit your final message with ONLY (under 15 lines — the detail lives in the report file). Line 1 is the bare status token — no preamble, no markdown formatting:
 
 `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`
 
 Then:
-- What you implemented (or attempted, if blocked)
-- What you tested and results (commands + output summary)
-- Files changed (paths)
-- Self-review findings (if any)
-- Concerns / questions / blockers (if status ≠ DONE)
+- One-line test summary (e.g. "14/14 passing")
+- Number of files changed (you do not commit — the diff stays in the working tree)
+- Your concerns, if any
+- The report file path
+
+If BLOCKED or NEEDS_CONTEXT, put the specifics in the final message itself — the orchestrator acts on it directly.
 
 Do NOT silently produce work you're unsure about — use `DONE_WITH_CONCERNS`.
 ```
@@ -105,7 +119,7 @@ Do NOT silently produce work you're unsure about — use `DONE_WITH_CONCERNS`.
 ```
 You are in the fix round of a review loop, continuing the thread in which you implemented this phase. The fused review (Opus + Sol control) found blocking issues in your diff. Fix ONLY the AUTHORIZED_BLOCKERS below, re-test, re-report.
 
-Re-inspect your current diff first — `git diff <base-sha>` — the tree may have moved since your last turn.
+Re-inspect your current diff first — `git diff <base-sha>` plus `git status --porcelain` (files you CREATED are untracked, invisible to `git diff` against a commit — read them directly) — the tree may have moved since your last turn. Your report from the previous round is at [REPORT_FILE]; you will append your fix results to that same file.
 
 ## Git
 
@@ -142,7 +156,15 @@ so the orchestrator can extend the ledger before you continue.
 
 ## Required output
 
-Line 1 is the bare status token — no preamble, no markdown formatting:
+First, append a section `## Fix round <N>` to [REPORT_FILE] (the same report file — do not overwrite it, do not create a new one). N is the number of the fused-review round whose blockers you are fixing — the first fix round writes `## Fix round 1`. The section must contain ALL THREE of:
+
+1. The names of the tests covering each fixed blocker
+2. The exact test command(s) you ran
+3. The relevant output
+
+All three are mandatory — a fix-round report missing any of them is returned to you before re-review. Reviewers will not re-run the full suite for you — your report is the test evidence.
+
+Then emit your final message with ONLY (under 15 lines — the detail lives in the report file). Line 1 is the bare status token — no preamble, no markdown formatting:
 
 `DONE` | `DONE_WITH_CONCERNS` | `NEEDS_AUTHORIZATION` | `BLOCKED`
 
@@ -153,10 +175,13 @@ Then emit the structured fields:
   - `<ledger id>: [<file paths>]`
 - `unauthorized_changes: []`   — MUST be empty; if not empty, each entry MUST explain why the change was unavoidable
 - `nits_applied: false`        — MUST be `false` unless the orchestrator explicitly authorized a NIT in the ledger
+- One-line test summary (e.g. "3/3 covering tests passing")
 - Concerns / questions / remaining ledger items not yet fixed (if status ≠ `DONE`)
-- Test / typecheck / linter results (commands + pass/fail summary)
+- The report file path
 
-Re-run tests after fixes. Every change in the diff must trace back either to an entry in AUTHORIZED_BLOCKERS or to `unauthorized_changes` (with justification).
+If NEEDS_AUTHORIZATION or BLOCKED, put the specifics in the final message itself — the orchestrator acts on it directly.
+
+Re-run the tests that cover the amended code after fixes. Every change in the diff must trace back either to an entry in AUTHORIZED_BLOCKERS or to `unauthorized_changes` (with justification).
 ```
 
 **Fresh fallback re-brief block** — when the fix round cannot resume the implementer thread (Claude-implemented phase, lost task id, stale job record), replace the opening paragraph above with:
@@ -166,5 +191,14 @@ You are in the fix round of a review loop. A previous run implemented one phase 
 
 ## Plan + phase (authoritative — read it)
 
-Path: `<repo-root>/docs/plans/<slug>.md`. Your phase: **`<id>`** (scope: `<one-line scope from frontmatter>`). The phase's implementation is the un-committed diff in the working tree — inspect it via `git diff <base-sha>`.
+Path: `<repo-root>/docs/plans/<slug>.md`. Your phase: **`<id>`** (scope: `<one-line scope from frontmatter>`). The phase's implementation is the un-committed diff in the working tree — inspect it via `git diff <base-sha>` plus `git status --porcelain`: files the previous round CREATED are untracked and invisible to `git diff` against a commit — read them directly. The previous round's full report is at [REPORT_FILE] — read it to see what was implemented and tested; you will append your fix results to that same file.
 ```
+
+## Step 5 fix wave (adapting the fix-round template)
+
+When the orchestrator dispatches the final-review fix wave (SKILL.md Step 5), the fix-round template above is reused as a **FRESH task with the fresh-fallback re-brief** (the whole-plan fix wave has no single implementer thread to resume), with these substitutions:
+
+- **Scope** is the WHOLE plan, not one phase: fill "Your phase" with `the whole plan (Step 5 final-review fix wave)` and drop the phase-scope line.
+- **Base** is MERGE_BASE (the branch start), and the implementation is COMMITTED — inspect it via `git diff <merge-base-sha>..HEAD`, not an uncommitted worktree diff.
+- **AUTHORIZED_BLOCKERS reviewer values** may also be `opus-final` (Step 5 findings), in addition to `opus-review | codex-control`.
+- **[REPORT_FILE]** = `$dir/final-fix-report.md` and does not exist yet — create it fresh and skip "read the previous round's report"; write your fix results as `## Fix round 1`.

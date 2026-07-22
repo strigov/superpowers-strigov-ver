@@ -25,9 +25,22 @@ Dispatch an Opus subagent to review code changes. The reviewer gets precisely cr
 
 **1. Get git SHAs:**
 ```bash
-BASE_SHA=$(git rev-parse HEAD~1)  # or origin/main
+BASE_SHA=<the SHA you recorded before the task started>  # or: $(git merge-base origin/main HEAD)
 HEAD_SHA=$(git rev-parse HEAD)
 ```
+
+Never `HEAD~1` as BASE for multi-commit work — it silently drops all but the last commit of a multi-commit task. If you did not record the task's starting SHA, use the merge-base with the mainline, not a fixed number of parents.
+
+**Optionally, pre-build a review package** so the reviewer reads one file instead of re-running git. Resolve the script the same way `codex-invocation` resolves `$DISPATCH`:
+
+```bash
+PKG="$(command -v review-package || true)"
+[ -z "$PKG" ] && PKG="$(ls -1d ~/.claude/plugins/cache/strigov-cc-plugins/superpowers-strigov-ver/*/bin/review-package 2>/dev/null | sort -rV | head -1)"
+[ -z "$PKG" ] && PKG="$(pwd)/bin/review-package"
+"$PKG" "$BASE_SHA" "$HEAD_SHA"   # prints: wrote <path>: N commit(s), M bytes
+```
+
+Pass the printed path as `{DIFF_FILE}`. Only the `wrote ...` line enters your context — never read the package yourself.
 
 **2. Dispatch Opus subagent:**
 
@@ -47,6 +60,7 @@ Agent(
 - `{PLAN_OR_REQUIREMENTS}` - What it should do
 - `{BASE_SHA}` - Starting commit
 - `{HEAD_SHA}` - Ending commit
+- `{DIFF_FILE}` - Review package path printed by `review-package` (optional; fill with `none` if you didn't build one — the reviewer then fetches the diff itself)
 - `{DESCRIPTION}` - Brief summary
 
 The subagent has no session context — the filled template is all it sees.
@@ -70,14 +84,17 @@ When Opus returns a clean verdict (no Critical/Important issues), dispatch a Cod
 Reuse the template at `../dev-orchestrator/codex-control-review-prompt.md`. Adapt the "Phase context" block for standalone use:
 - Replace "Plan file" with `{PLAN_OR_REQUIREMENTS}` content (paste it verbatim, not a path).
 - Drop "Current phase id".
-- Keep base SHA and "current diff" pointer.
+- Keep "Base commit" = `{BASE_SHA}`. Fill "Review package" with the `review-package` path (`{DIFF_FILE}`); if you built none (`DIFF_FILE: none`), keep the template's fallback in place — the reviewer fetches the diff itself with `git diff --stat <base-sha>` / `git diff -U10 <base-sha>`.
+- Fill `[GLOBAL_CONSTRAINTS]` with the project-wide constraints stated in `{PLAN_OR_REQUIREMENTS}`, or literally `None declared` if there are none.
+- Fill "Implementer report:" with `none — standalone review` and "Verify additionally" with `none`.
+- Ledger references (`AUTHORIZED_CHANGE_LEDGER`, `docs/plans/<slug>.ledger.json`): no ledger exists in standalone use — delete those sentences from the filled prompt.
 
 Invocation is read-only (`--effort xhigh`, no `--write`). Poll via Monitor per `codex-invocation` skill.
 
 **Combined verdict handling (same loop as dev-orchestrator Step 4, cap=4):**
 
 - Both clean → proceed to implementation order.
-- Either has BLOCKING → collect combined list (Opus + Codex BLOCKING), fix, then re-dispatch **both** reviewers in a fresh round. `--resume-task <task id of Codex's previous review round>` for Codex on rounds 2+.
+- Either has BLOCKING → collect combined list (Opus + Codex BLOCKING), fix, then re-dispatch **both** reviewers in a fresh round. Codex rounds 2+ are FRESH tasks using the template's own follow-up section — no `--resume-task` (matches the template's round-2+ rule; adapt its ledger references away as above).
 - Round 4 without both-clean → escalate: combined list + one-sentence impasse summary. User picks accept / another round / close.
 
 Anti-pingpong: don't let either reviewer re-raise an item the other side explicitly rejected with reasoning. No-progress: if two consecutive rounds produce identical combined BLOCKING — escalate.
@@ -97,6 +114,7 @@ HEAD_SHA=$(git rev-parse HEAD)
   PLAN_OR_REQUIREMENTS: Task 2 from docs/superpowers/plans/deployment-plan.md
   BASE_SHA: a7981ec
   HEAD_SHA: 3df7661
+  DIFF_FILE: none
   DESCRIPTION: Added verifyIndex() and repairIndex() with 4 issue types
 
 [Subagent returns]:
