@@ -20,7 +20,7 @@
   <g font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">
     <g transform="translate(46 132)">
       <rect width="158" height="192" rx="18" fill="#131B32" stroke="#475477"/>
-      <text x="20" y="34" fill="#7C8CFF" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">01 / SOL</text>
+      <text x="20" y="34" fill="#7C8CFF" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">01 / OPUS</text>
       <text x="20" y="74" fill="#F5F7FF" font-size="25" font-weight="700">План</text>
       <text x="20" y="105" fill="#AEB7D0" font-size="17">scope</text>
       <text x="20" y="129" fill="#AEB7D0" font-size="17">интерфейсы</text>
@@ -31,7 +31,7 @@
 
     <g transform="translate(232 132)">
       <rect width="158" height="192" rx="18" fill="#131B32" stroke="#475477"/>
-      <text x="20" y="34" fill="#7C8CFF" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">02 / OPUS</text>
+      <text x="20" y="34" fill="#7C8CFF" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">02 / SOL</text>
       <text x="20" y="74" fill="#F5F7FF" font-size="25" font-weight="700">Ревью</text>
       <text x="20" y="105" fill="#AEB7D0" font-size="17">пробелы</text>
       <text x="20" y="129" fill="#AEB7D0" font-size="17">контракты</text>

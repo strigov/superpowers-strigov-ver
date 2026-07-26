@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version 0.6.1" src="https://img.shields.io/badge/version-0.6.1-7c8cff?style=flat-square">
+  <img alt="Version 0.6.2" src="https://img.shields.io/badge/version-0.6.2-7c8cff?style=flat-square">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude_Code-plugin-d97757?style=flat-square">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-35d6a6?style=flat-square">
 </p>
@@ -70,8 +70,8 @@ You can also describe the implementation task normally. The plugin recognizes En
   <img src="./assets/readme/workflow-en.svg" width="100%" alt="Six-stage delivery protocol from plan to whole-branch merge gate">
 </p>
 
-1. **Plan** — Codex Sol writes a durable implementation plan with scope, interfaces, global constraints, tests, and risks.
-2. **Challenge** — a fresh Opus reviewer finds material gaps; authorized corrections return to the original Sol thread.
+1. **Plan** — an Opus subagent explores the repository and writes a durable implementation plan with scope, interfaces, global constraints, tests, and risks.
+2. **Challenge** — a fresh Codex Sol review finds material gaps; authorized corrections go back to a fresh Opus writer through the ledger.
 3. **Build** — Luna implements one phase and writes a report. Terra can continue the same thread when deeper reasoning is required.
 4. **Verify** — a Sonnet gate runs lint, typecheck, and affected tests before expensive review begins.
 5. **Review twice** — Opus checks spec compliance and quality, then a fresh Sol control review probes edge cases, races, security, and regressions. Fable takes the primary judgment role for SECURITY/DATA_LOSS phases or from round three, with an explicit Opus fallback.
@@ -82,8 +82,8 @@ Every Codex continuation is thread-addressed with `--resume-task <task-id>`. Rev
 ## Model roles
 
 - **Orchestrator · Claude Sonnet** — triage, dispatch, polling, state transitions, and safe Git bookkeeping. Never writes production code.
-- **Plan writer · GPT-5.6 Sol `max`** — explores the task, writes the plan, and applies authorized plan revisions.
-- **Plan reviewer · Claude Opus + `ultrathink`** — reviews the plan in a fresh context and blocks on material gaps.
+- **Plan writer · Claude Opus + `ultrathink`** — explores the repository, writes the plan, and applies authorized plan revisions.
+- **Plan reviewer · GPT-5.6 Sol `max`** — reviews the plan read-only in a fresh task each round and blocks on material gaps.
 - **Implementer · GPT-5.6 Luna `max`** — implements non-frontend phases and authorized fix rounds.
 - **Reasoning escalation · GPT-5.6 Terra `xhigh`** — continues a blocked implementation thread when more reasoning is needed.
 - **Primary code reviewer · Claude Opus + `ultrathink`** — checks spec compliance and code quality in routine rounds.
@@ -91,7 +91,7 @@ Every Codex continuation is thread-addressed with `--resume-task <task-id>`. Rev
 - **Control reviewer · GPT-5.6 Sol `xhigh`** — supplies a fresh, read-only second opinion after the primary review clears.
 - **Verification and synthesis · Claude Sonnet** — runs mechanical gates and consolidates multi-round review history.
 
-`ultra` is never chosen automatically. The Sol plan writer uses it only when the user explicitly requests it.
+`ultra` is never chosen automatically. The Sol plan reviewer uses it only when the user explicitly requests it.
 
 ## Guardrails
 

@@ -31,7 +31,7 @@
 
     <g transform="translate(0 276)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">
       <rect width="120" height="38" rx="19" fill="#18213D" stroke="#46547D"/>
-      <text x="60" y="25" text-anchor="middle" fill="#E7EBFA">v0.6.1</text>
+      <text x="60" y="25" text-anchor="middle" fill="#E7EBFA">v0.6.2</text>
       <rect x="132" width="160" height="38" rx="19" fill="#132B2A" stroke="#277C67"/>
       <text x="212" y="25" text-anchor="middle" fill="#73E6C1">MIT LICENSE</text>
       <rect x="304" width="204" height="38" rx="19" fill="#211D38" stroke="#665CA0"/>
@@ -55,14 +55,14 @@
 
       <g transform="translate(172 48)">
         <rect width="148" height="58" rx="14" fill="#151D36" stroke="#4A587D"/>
-        <text x="74" y="25" text-anchor="middle" fill="#F3F5FF" font-size="19" font-weight="650">Sol</text>
-        <text x="74" y="46" text-anchor="middle" fill="#98A4C3" font-size="15">план + контроль</text>
+        <text x="74" y="25" text-anchor="middle" fill="#F3F5FF" font-size="19" font-weight="650">Opus</text>
+        <text x="74" y="46" text-anchor="middle" fill="#98A4C3" font-size="15">план + ревью</text>
       </g>
 
       <g transform="translate(24 126)">
         <rect width="134" height="60" rx="14" fill="#151D36" stroke="#4A587D"/>
-        <text x="67" y="26" text-anchor="middle" fill="#F3F5FF" font-size="19" font-weight="650">Opus</text>
-        <text x="67" y="47" text-anchor="middle" fill="#98A4C3" font-size="15">ревьюит</text>
+        <text x="67" y="26" text-anchor="middle" fill="#F3F5FF" font-size="19" font-weight="650">Sol</text>
+        <text x="67" y="47" text-anchor="middle" fill="#98A4C3" font-size="15">ревью + контроль</text>
       </g>
 
       <g transform="translate(334 126)">

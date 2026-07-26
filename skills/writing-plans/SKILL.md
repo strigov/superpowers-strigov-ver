@@ -20,52 +20,52 @@ Assume they are a skilled developer, but know almost nothing about our toolset o
 
 ## Model split
 
-Same writer/reviewer pair as `dev-orchestrator` Steps 1–2: **Codex Sol max writes, Opus reviews** — writer and reviewer never share a model family.
+Same writer/reviewer pair as `dev-orchestrator` Steps 1–2: **Opus max writes, Codex Sol max reviews** — writer and reviewer never share a model family.
 
-**Main thread (orchestration only):** announces, gathers context, assembles the writer prompt file from the guidance below, dispatches the Codex plan writer, runs the Opus review loop, commits, offers execution options. Never writes the plan directly.
+**Main thread (orchestration only):** announces, gathers context, assembles the writer prompt from the guidance below, dispatches the Opus plan writer, runs the Codex review loop, commits, offers execution options. Never writes the plan directly.
 
-**Codex Sol max** writes the plan. Invocation per `../dev-orchestrator/codex-plan-writer-prompt.md` and the `codex-invocation` skill:
+**Opus subagent (max thinking)** writes the plan. Invocation per `../dev-orchestrator/opus-plan-writer-prompt.md`:
 
-```bash
-"$DISPATCH" task --background --write --model gpt-5.6-sol --effort max --prompt-file <scratch>/plan-<slug>.md
+```
+Agent(subagent_type="general-purpose", model="opus", prompt=<assembled prompt>)
 ```
 
-Record the task id — revisions and defect fixes resume this thread (`--resume-task`). **Never `--effort ultra` unless the user explicitly asked for it in their own words** — do not offer it. The task has no session context; the prompt file must be fully self-contained and include:
+**The prompt's literal first line MUST be `ultrathink`.** There is no task id to record — every writer dispatch is fresh; the plan file on disk and the ledger are the continuity, so revisions re-read the plan instead of resuming a thread. The subagent has no session context; the prompt must be fully self-contained and include:
 
-- The Mode A opening block from `../dev-orchestrator/codex-plan-writer-prompt.md` (read-repo/write-plan-file-only framing, no-git rule).
+- The Mode A opening block from `../dev-orchestrator/opus-plan-writer-prompt.md` (research-the-repo / write-plan-file-only framing, no-git rule).
 - User's original request verbatim.
 - Spec file path if available (e.g. when called after brainstorming) — otherwise paste the relevant requirements directly into the prompt.
 - Repo root (absolute path), language/framework, any constraints you know.
 - Target plan path: `docs/plans/YYYY-MM-DD-<slug>.md` (unless user specified a custom location).
-- **All the guidance in this skill below (Scope Check through Self-Review)** — these sections define HOW the writer must build the plan. Paste them into the prompt file; don't just reference this skill.
+- **All the guidance in this skill below (Scope Check through Self-Review)** — these sections define HOW the writer must build the plan. Paste them into the prompt; don't just reference this skill.
 - Instruction to run the Self-Review inline after writing, fixing issues in place (no separate round trip).
 
-**Pre-dispatch verification — run on the assembled prompt file before dispatching:**
+**Pre-dispatch verification — run on the assembled prompt before dispatching:**
 
-1. Flags exactly: `--background --write --model gpt-5.6-sol --effort max --prompt-file <path>` (no `ultra` unless the user explicitly asked).
-2. Every bullet above is physically present in the prompt file. In particular the FULL TEXT of these sections must be pasted in: Scope Check, File Structure, Bite-Sized Step Granularity, Plan Document Header, Required body sections, Phase Structure, No Placeholders, Remember, Self-Review. Litmus test: if the prompt does not contain the fenced YAML frontmatter template and the `## Ф1:` example layout, you referenced instead of pasted — go back and paste.
+1. `model="opus"` and the literal first line is `ultrathink`.
+2. Every bullet above is physically present in the prompt. In particular the FULL TEXT of these sections must be pasted in: Scope Check, File Structure, Bite-Sized Step Granularity, Plan Document Header, Required body sections, Phase Structure, No Placeholders, Remember, Self-Review. Litmus test: if the prompt does not contain the fenced YAML frontmatter template and the `## Ф1:` example layout, you referenced instead of pasted — go back and paste.
 3. No unfilled `<placeholder>` tokens remain (scan the prompt for `<`).
 4. All paths absolute.
 
 **After the writer returns — mechanical frontmatter validation (main thread):**
 
-Read the plan file's first 30 lines and check: file starts with `---`; frontmatter has `slug`, `created`, `status: in-progress`, and a `phases:` list; first phase `status: in-progress`, all others `status: pending`; every `phases[].id` matches a `## <id>:` H2 in the body (check via `grep -n '^## Ф' <plan-file>`); if any `parallel_group` is present, each group id appears on exactly 2 phases. If a check fails: frontmatter-only defects you may fix mechanically yourself; body defects → resume the writer thread (`--resume-task <writer-task-id>`) naming the specific defect. Do not send a malformed plan to review.
+Read the plan file's first 30 lines and check: file starts with `---`; frontmatter has `slug`, `created`, `status: in-progress`, and a `phases:` list; first phase `status: in-progress`, all others `status: pending`; every `phases[].id` matches a `## <id>:` H2 in the body (check via `grep -n '^## Ф' <plan-file>`); if any `parallel_group` is present, each group id appears on exactly 2 phases. If a check fails: frontmatter-only defects you may fix mechanically yourself; body defects → dispatch a fresh Opus writer (Mode B shape: plan path + the specific defect as the authorized change). Do not send a malformed plan to review.
 
-This skill produces plans in the YAML-frontmatter + phases format consumed natively by `dev-orchestrator`. The TDD discipline (failing test → minimal impl → passing test → commit) lives **inside** each phase as the step pattern — phases are the orchestration unit, TDD steps are the work pattern. The canonical format definition lives in `../dev-orchestrator/codex-plan-writer-prompt.md` Mode A — keep this skill's format guidance below in sync with it.
+This skill produces plans in the YAML-frontmatter + phases format consumed natively by `dev-orchestrator`. The TDD discipline (failing test → minimal impl → passing test → commit) lives **inside** each phase as the step pattern — phases are the orchestration unit, TDD steps are the work pattern. The canonical format definition lives in `../dev-orchestrator/opus-plan-writer-prompt.md` Mode A — keep this skill's format guidance below in sync with it.
 
-**Opus subagent** reviews the plan after the Sol writer produces it. Reuse `../dev-orchestrator/opus-plan-reviewer-prompt.md` verbatim (`ultrathink` first line, fresh subagent each round; adapt the opening line to name this skill instead of dev-orchestrator). The review stages, finding classes, and output format apply unchanged. Loop cap=4.
+**Codex Sol max** reviews the plan after the Opus writer produces it. Reuse `../dev-orchestrator/codex-plan-reviewer-prompt.md` verbatim (`--model gpt-5.6-sol --effort max`, no `--write`, fresh task each round; adapt the opening line to name this skill instead of dev-orchestrator). The review stages, finding classes, and output format apply unchanged. Loop cap=4.
 
 Verdict handling (identical to dev-orchestrator Step 2):
 
 - `APPROVED` → commit the plan file separately (`docs(plans): add <slug>`, stage only the plan file, Co-Authored-By trailer). Then proceed to Execution Handoff.
-- `CHANGES_REQUESTED` → run the ledger sequence from `../dev-orchestrator/SKILL.md` Step 2, in order: (a) triage the BLOCKING list, (b) write/update the ledger (see "Authorized Change Ledger" below), (c) resume the Sol writer (`--resume-task <writer-task-id>`, Mode B from `../dev-orchestrator/codex-plan-writer-prompt.md`) with the plan file path, the ledger path, and the open ACCEPTED / PARTIALLY_ACCEPTED items inline — revise in place, not rewrite, (d) after the writer returns, dispatch a FRESH Opus reviewer with the follow-up template. Never resume the writer on the raw BLOCKING list before the ledger exists. Increment counter.
+- `CHANGES_REQUESTED` → run the ledger sequence from `../dev-orchestrator/SKILL.md` Step 2, in order: (a) triage the BLOCKING list, (b) write/update the ledger (see "Authorized Change Ledger" below), (c) dispatch a fresh Opus writer (Mode B from `../dev-orchestrator/opus-plan-writer-prompt.md`) with the plan file path, the ledger path, and the open ACCEPTED / PARTIALLY_ACCEPTED items inline — revise in place, not rewrite, (d) after the writer returns, dispatch a FRESH Codex Sol max reviewer with the follow-up template. Never dispatch the writer on the raw BLOCKING list before the ledger exists. Increment counter.
 - Round 4 without APPROVED → escalate to user: plan path + last blocking list + one-sentence disagreement summary. User picks: accept / another round / close.
 
 Anti-pingpong: if the reviewer repeats a blocking point that was explicitly rejected with reasoning in a prior round, mark `resolved-by-decision`, do not loop on it. No-progress: if two consecutive rounds produce an identical blocking list, escalate immediately.
 
 **New-blocker churn detector.** Escalate immediately, even before cap=4, when all prior blockers are closed (per the ledger) and the reviewer returns only NEW `MUST_FIX_NOW` items that don't cite DATA_LOSS / SECURITY / GUARANTEED_FAIL materiality. `REGRESSION_FROM_AUTHORIZED_FIX` items don't count as "new" — they are causally tied to a prior accepted fix. Canonical wording lives in `../dev-orchestrator/SKILL.md` Step 2 verdict-handling; mirror it from there rather than restating.
 
-**Authorized Change Ledger.** For each `CHANGES_REQUESTED` round, the orchestrator constructs the same `docs/plans/<slug>.ledger.json` artifact described in `../dev-orchestrator/SKILL.md` (see "## Authorized Change Ledger" there for shape, lifecycle, and the reviewer-side materiality vocabulary — `MUST_FIX_NOW`, `REGRESSION_FROM_AUTHORIZED_FIX`, `DEFER`, `NIT`, `REJECTED_BY_SCOPE` — alongside the orchestrator-side label `AUTHORIZED_CHANGE_LEDGER`). Pass the ledger path to the Sol writer on the revision resume and to the fresh Opus reviewer each round. The ledger is transient orchestrator state — never staged, never committed — but it is NOT deleted when this skill's review loop ends: it survives `APPROVED` and is handed to `dev-orchestrator`, whose Step 4 and Step 5 loops share the same file; only plan archival (Step 5 `REVIEW_OK`) or abandonment deletes it (see "Where it lives" under "## Authorized Change Ledger" in `../dev-orchestrator/SKILL.md`). The same vocabulary applies to plan-review rounds run from this skill.
+**Authorized Change Ledger.** For each `CHANGES_REQUESTED` round, the orchestrator constructs the same `docs/plans/<slug>.ledger.json` artifact described in `../dev-orchestrator/SKILL.md` (see "## Authorized Change Ledger" there for shape, lifecycle, and the reviewer-side materiality vocabulary — `MUST_FIX_NOW`, `REGRESSION_FROM_AUTHORIZED_FIX`, `DEFER`, `NIT`, `REJECTED_BY_SCOPE` — alongside the orchestrator-side label `AUTHORIZED_CHANGE_LEDGER`). Pass the ledger path to the Opus writer on every revision dispatch and to the fresh Codex reviewer each round. The ledger is transient orchestrator state — never staged, never committed — but it is NOT deleted when this skill's review loop ends: it survives `APPROVED` and is handed to `dev-orchestrator`, whose Step 4 and Step 5 loops share the same file; only plan archival (Step 5 `REVIEW_OK`) or abandonment deletes it (see "Where it lives" under "## Authorized Change Ledger" in `../dev-orchestrator/SKILL.md`). The same vocabulary applies to plan-review rounds run from this skill.
 
 ## Scope Check
 
@@ -141,7 +141,7 @@ After the YAML frontmatter and the `# [Feature Name] Implementation Plan` title,
 5. `## Risks / unknowns / assumptions` — named explicitly. Anything you are guessing at.
 6. `## Phases` — per phase an H2 `## Ф1: <title>`, `## Ф2: <title>`, ... with the detailed TDD steps inside each (see "## Phase Structure" below).
 
-This mirrors `dev-orchestrator/codex-plan-writer-prompt.md` Mode A — the two files are the joint authority for the format. Keep them aligned when either changes.
+This mirrors `dev-orchestrator/opus-plan-writer-prompt.md` Mode A — the two files are the joint authority for the format. Keep them aligned when either changes.
 
 Self-Review (see below) is a check the plan writer runs in-process while writing — it is NOT a section in the committed plan file.
 
@@ -224,7 +224,7 @@ Every step must contain the actual content an engineer needs. These are **plan f
 
 ## Self-Review
 
-The plan writer runs this self-review inline while writing the plan — include these instructions in the writer prompt file. This is a checklist the writer runs itself — not a separate dispatch.
+The plan writer runs this self-review inline while writing the plan — include these instructions in the writer prompt. This is a checklist the writer runs itself — not a separate dispatch.
 
 **1. Spec coverage:** Skim each section/requirement in the spec. Can you point to a phase (and a step inside it) that implements it? List any gaps.
 
@@ -240,9 +240,9 @@ If you find issues, fix them inline. No need to re-review — just fix and move 
 
 ## Execution Handoff
 
-After the Opus review returns APPROVED and the plan is committed, hand off to the implementer:
+After the Codex review returns APPROVED and the plan is committed, hand off to the implementer:
 
-**"Plan complete (written by Sol max, reviewed by Opus), saved to `docs/plans/<filename>.md`. Ready to execute via `dev-orchestrator` — one phase at a time, with auto-commit per phase and fused Opus + Codex review on each diff. Start now?"**
+**"Plan complete (written by Opus max, reviewed by Sol max), saved to `docs/plans/<filename>.md`. Ready to execute via `dev-orchestrator` — one phase at a time, with auto-commit per phase and fused Opus + Codex review on each diff. Start now?"**
 
 - **REQUIRED SUB-SKILL:** Use `dev-orchestrator` (it reads the YAML frontmatter, picks up the first `status: in-progress` phase, and dispatches the implementer).
 

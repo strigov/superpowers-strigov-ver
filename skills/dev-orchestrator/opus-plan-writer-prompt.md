@@ -1,36 +1,41 @@
-# Codex Plan Writer Prompt (Sol max) — Plan Writing / Revision
+# Opus Plan Writer Prompt (Opus subagent, max thinking) — Plan Writing / Revision
 
 Use when the orchestrator needs a plan written (Step 1) or revised after plan review (Step 2 CHANGES_REQUESTED).
 
 ## Invocation
 
-```bash
-"$DISPATCH" task \
-  --background \
-  --write \
-  --model gpt-5.6-sol \
-  --effort max \
-  --prompt-file <scratch>/plan-<slug>.md
+```
+Agent tool:
+  subagent_type: "general-purpose"
+  model: "opus"
+  description: "Write plan <slug>"          # Mode A
+  description: "Revise plan <slug> (round <k>)"   # Mode B
+  prompt: |
+    <Mode A or Mode B prompt below>
 ```
 
-`$DISPATCH` is the `codex-dispatch` wrapper — resolve it once per session per the `codex-invocation` skill. Write the filled prompt to a scratch file first and pass it via `--prompt-file`. `--write` is required — the plan writer creates the plan file itself. Record the task id: revisions resume this thread.
+**The prompt's literal first line MUST be `ultrathink`** — it runs Opus at max thinking effort. Both templates below already start with it; keep it first.
 
-**Effort is `max`, never `ultra`, unless the user EXPLICITLY asked for ultra in their own words.** Do not propose ultra yourself — not as a question, not as a recommendation. (Ultra is Sol's parallel-subagent mode: 4× the tokens; the user opts in when they want it.)
+The subagent writes the plan file itself (a `general-purpose` agent has `Write` / `Edit`) and may read anything in the repository — research inside the subagent is exactly what it is for, and it is the reason planning moved off Codex. It must NOT touch source files and must NOT run state-changing git commands.
 
-For revisions (Mode B) dispatch with `--resume-task <plan-writer-task-id>` — same flags otherwise; the thread already holds the request, the repo context, and the plan it wrote.
+**Every dispatch is a FRESH subagent.** There is no Codex-style `--resume-task` here: a Claude subagent carries nothing between dispatches. Mode B therefore re-reads the plan from disk and takes its entire scope from the ledger — it never relies on remembering having written the plan. The plan file on disk is the only continuity, which is also why the orchestrator never lets the plan text live only in a prompt.
 
-Poll with Monitor using the terminal-only filter from `codex-invocation`. Fetch via `"$DISPATCH" result task-XXXX`.
+The reviewer of this artifact is the Codex plan reviewer, Sol max (`./codex-plan-reviewer-prompt.md`) — writer and reviewer never share a model family.
 
-The task has NO session context beyond its own thread. The Mode A prompt must be fully self-contained — include user's original request, repo path, any conventions or constraints you know.
+Both modes are fully self-contained: the subagent sees nothing from the orchestrator's session, so the user's original request, the repo path, and every known constraint must be physically in the prompt.
 
 ---
 
 ## Mode A: Write a new plan (Step 1)
 
 ```
-You are writing an implementation plan for a multi-phase feature. This is dispatched by dev-orchestrator; the orchestrator (Sonnet main thread) will then send your plan to an Opus reviewer.
+ultrathink
 
-You may read anything in the repository, but write ONLY the plan file specified below. Do not modify source code, tests, or any other file. Do NOT run `git commit` / `git push` — the orchestrator handles git.
+You are the plan-writing stage of dev-orchestrator: a fresh Claude Opus subagent writing an implementation plan for a multi-phase feature. The orchestrator (Sonnet main thread) will send your plan to a Codex (GPT-5.6 Sol, effort max) reviewer, then drive implementation phase by phase from it.
+
+You may read anything in the repository, but write ONLY the plan file specified below. Do not modify source code, tests, or any other file. Do NOT run `git commit` / `git push` or any other state-changing git command — the orchestrator handles git.
+
+Explore before you write. You are the research stage as well as the writing stage: verify every path, signature, and pattern your plan names against the actual source, and never invent an API. A plan that names a function that does not exist costs an implementation round.
 
 ## User's original request (verbatim)
 
@@ -81,7 +86,7 @@ Body must have these H2 sections, in order:
 1b. `## Non-goals / deferred` — explicit exclusions. Reviewers MUST classify requests for these as `REJECTED_BY_SCOPE` or `DEFER` unless the orchestrator authorizes scope expansion.
 1c. `## Global Constraints` — the spec's project-wide requirements — version floors, dependency limits, naming and copy rules, platform requirements — one line each, with exact values copied verbatim from the spec or user request. Every phase's requirements implicitly include this section. If the spec imposes none, write literally `None declared in the spec.` Do NOT merge into `## Contracts`: Contracts define interfaces between phases; Global Constraints are external requirements binding the whole plan.
 2. `## Files` — paths to create/modify, grouped by phase. Each file: one-line responsibility.
-3. `## Contracts` — function signatures, data shapes, API surface. Exact enough that Codex can implement without guessing.
+3. `## Contracts` — function signatures, data shapes, API surface. Exact enough that the implementer can build without guessing.
 4. `## Test strategy` — what proves correctness, per phase. Test types (unit/integration/e2e), key cases, what NOT to test.
 5. `## Risks / unknowns / assumptions` — named explicitly. Anything you are guessing at.
 6. `## Phases` — per phase an H2 `## Ф1: <title>`, `## Ф2: <title>`, ... with the detailed steps inside each.
@@ -141,18 +146,22 @@ That's it. Do NOT commit — the orchestrator handles git.
 
 ---
 
-## Mode B: Revise a plan (Step 2 CHANGES_REQUESTED — `--resume-task <plan-writer-task-id>`)
+## Mode B: Revise a plan (Step 2 CHANGES_REQUESTED — fresh Opus subagent)
 
-The orchestrator dispatches Mode B after the Opus plan reviewer returned `CHANGES_REQUESTED` and the orchestrator has triaged the findings into the AUTHORIZED_CHANGE_LEDGER (see `dev-orchestrator/SKILL.md` "## Authorized Change Ledger"). The ledger is the single authoritative input for this dispatch — work only on its open ACCEPTED / PARTIALLY_ACCEPTED items.
+The orchestrator dispatches Mode B after the Codex plan reviewer returned `CHANGES_REQUESTED` and the orchestrator has triaged the findings into the AUTHORIZED_CHANGE_LEDGER (see `dev-orchestrator/SKILL.md` "## Authorized Change Ledger"). The ledger is the single authoritative input for this dispatch — work only on its open ACCEPTED / PARTIALLY_ACCEPTED items.
 
 ```
-You are revising the implementation plan you wrote earlier in this thread, based on reviewer feedback. Do not rewrite from scratch — apply only the changes the orchestrator has authorized via the ledger below.
+ultrathink
+
+You are the plan-revision stage of dev-orchestrator: a fresh Claude Opus subagent revising an implementation plan after a Codex (GPT-5.6 Sol) plan review returned blocking findings. You did NOT write this plan and you have no memory of it — read it from disk first. Do not rewrite it from scratch: apply only the changes the orchestrator has authorized via the ledger below.
+
+You may read anything in the repository, but write ONLY the plan file below. Do not modify source code or tests. Do NOT run `git commit` / `git push` — the orchestrator handles git.
 
 ## Plan file to revise
 
 `<absolute path>`
 
-Re-read it in full (including frontmatter) before editing — the file on disk is authoritative, not your memory of it.
+Read it in full (including frontmatter) before editing — the file on disk is authoritative.
 
 ## AUTHORIZED_CHANGE_LEDGER
 
@@ -160,7 +169,13 @@ Re-read it in full (including frontmatter) before editing — the file on disk i
 
 <paste open ledger items inline — orchestrator inlines ACCEPTED / PARTIALLY_ACCEPTED entries so you don't need to re-parse JSON>
 
-The ledger is the authoritative scope for this revision. Items not appearing as ACCEPTED / PARTIALLY_ACCEPTED here are NOT authorized — do not act on them, even if you remember them from a prior round.
+The ledger is the authoritative scope for this revision. Items not appearing as ACCEPTED / PARTIALLY_ACCEPTED here are NOT authorized — do not act on them.
+
+## Reviewer findings behind these items (context only, verbatim)
+
+<paste the reviewer's BLOCKING lines for the ledger items above — they explain WHY each change is required>
+
+These lines are context for understanding the authorized changes. They do NOT widen scope: where a finding suggests more than its ledger item authorizes, the ledger wins.
 
 ## Revision scope contract
 
@@ -186,7 +201,7 @@ do NOT apply the broader change silently. Stop the revision and return
 `NEEDS_AUTHORIZATION: <ledger id> requires <extra change> because <reason>`
 so the orchestrator can extend the ledger before you continue.
 
-Preserve the existing frontmatter structure; update only what this revision actually changes. Do NOT commit — the orchestrator handles git.
+Preserve the existing frontmatter structure; update only what this revision actually changes.
 
 ## Output
 

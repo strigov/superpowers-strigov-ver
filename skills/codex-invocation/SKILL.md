@@ -63,7 +63,7 @@ A JSON snapshot (workspaceRoot, sessionRuntime, running, recent) means the wrapp
 
 | Role | Flags |
 |---|---|
-| Plan writing / revision (dev-orchestrator Step 1 / 2, writing-plans) | `--model gpt-5.6-sol --effort max --write` |
+| Plan review (dev-orchestrator Step 2, writing-plans) | `--model gpt-5.6-sol --effort max` (no `--write`; fresh task every round) |
 | Control review (Step 4.2) | `--model gpt-5.6-sol --effort xhigh` |
 | Spec review (brainstorming) | `--model gpt-5.6-sol --effort xhigh` |
 | Implementation + fix rounds (Step 3 / 4) | `--model gpt-5.6-luna --effort max --write` |
@@ -82,8 +82,8 @@ Expected output: `Codex Task started in the background as task-XXXX`.
 
 **Flag sanity before submitting** (re-check every dispatch):
 - `--background` — always;
-- `--write` — ONLY when the task must modify files (plan writing, implementation); never on reviews;
-- `--model` + `--effort` match the role table above (plan writer = sol/max; reviews = sol/xhigh; implementation = luna/max; escalation = terra/xhigh); no `ultra` unless the user explicitly asked;
+- `--write` — ONLY when the task must modify files (implementation); never on reviews, and no plan-stage Codex role writes files any more;
+- `--model` + `--effort` match the role table above (plan review = sol/max; control + spec review = sol/xhigh; implementation = luna/max; escalation = terra/xhigh); no `ultra` unless the user explicitly asked;
 - `--resume-task task-XXXX` — the standard way to continue a prior Codex conversation: resumes the thread of exactly that task id, regardless of what ran in between (see "Resume semantics" below). Track the task id of each role's last dispatch and resume by it;
 - `--resume-last` — legacy positional resume ("newest thread in this repo"); only safe when no other Codex task ran in between. Prefer `--resume-task` everywhere; first round of a new loop goes without either.
 
@@ -135,8 +135,8 @@ Relay Codex's report to the next step verbatim (or summarize into the next promp
 ## Flag reference
 
 - `--background` — return immediately with task id. **Mandatory.**
-- `--write` — Codex may modify files (plan writer, implementer). Omit for review-only runs (default is read-only).
-- `--effort <low|medium|high|xhigh|max|ultra>` — reasoning effort (max/ultra are a local companion patch; upstream stops at xhigh). In dev-orchestrator: plan writing / implementation = `max`, reviews / escalation = `xhigh`. Nothing lower. `ultra` only on explicit user request.
+- `--write` — Codex may modify files (implementer). Omit for review-only runs (default is read-only).
+- `--effort <low|medium|high|xhigh|max|ultra>` — reasoning effort (max/ultra are a local companion patch; upstream stops at xhigh). In dev-orchestrator: plan review / implementation = `max`, control review / escalation = `xhigh`. Nothing lower. `ultra` only on explicit user request.
 - `--model <name>` — the role's model (see role table above). The wrapper auto-pins `gpt-5.6-sol` if you don't pass this. Override the wrapper default globally with `CODEX_DEFAULT_MODEL=...` in the env.
 - `--resume-task <task-id>` — continue the Codex conversation of exactly that prior task. Thread-addressed: immune to whatever ran in between. **Preferred resume mechanism.**
 - `--resume-last` — continue the newest task thread in this repo. Legacy; safe only when no other Codex task ran in between. Prefer `--resume-task`.
@@ -148,14 +148,15 @@ Related commands: `status [job-id] [--all] [--json]`, `result [job-id] [--json]`
 
 **`--resume-task task-XXXX`** (vendored-companion extension, idea borrowed from [TRIP-workflow](https://github.com/PiLastDigit/TRIP-workflow)'s per-target thread files) resolves the stored job record of `task-XXXX` and resumes **that job's own thread**. Because the reference is explicit, it stays correct no matter how many other Codex tasks (other roles, other loops, parallel reviews) ran in between. Rules:
 
-- Track the task id of each ROLE's latest dispatch (plan reviewer, implementer, control reviewer are separate roles — never cross them).
+- Track the task id of each ROLE's latest dispatch (spec reviewer, implementer, control reviewer are separate roles — never cross them).
 - Any task id of the same role/thread works: resuming `task-0007` after the thread already continued in `task-0012` lands in the same thread — the id is resolved to its thread, not replayed.
 - The referenced task must be terminal (`completed`); a still-running reference errors out cleanly.
 - Worktree isolation unchanged: pass the same `--cwd` as the original dispatch, ids are per-workspace.
 
 **`--resume-last`** resumes the NEWEST completed task thread in this repo — regardless of what role that task played. It remains ONLY as a fallback when a task id got lost; if you use it, first confirm via `status --json` that the newest thread really is the one you intend to continue. Prefer `--resume-task` in every loop:
 
-- **Plan / spec review loops** (Codex review → Opus revision → Codex re-review): `--resume-task <plan-review-task-id>`.
+- **Spec review loop** (brainstorming: Codex review → Fable revision → Codex re-review): `--resume-task <spec-review-task-id>`.
+- **dev-orchestrator Step 2 plan review**: FRESH task every round, never resumed — same bias decision as Step 4.2 below. Use the follow-up template plus the ledger, not thread memory.
 - **Implementer `NEEDS_CONTEXT` / effort-upgrade re-dispatch**: `--resume-task <implementer-task-id>`.
 - **dev-orchestrator Step 4 fix rounds**: `--resume-task <implementer-task-id>` — the fixer continues its own implementation thread with full context even though the control reviewer ran in between. (Before `--resume-task` existed this loop was forced to use fresh fully re-briefed dispatches.)
 - **Step 4 control review rounds 2+**: still dispatched FRESH **by design** — an independent second opinion must not anchor on its own prior rounds. This is a bias decision, not a resume limitation.

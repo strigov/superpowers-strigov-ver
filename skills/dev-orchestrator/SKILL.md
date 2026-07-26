@@ -1,6 +1,6 @@
 ---
 name: dev-orchestrator
-description: Multi-model subagent-driven workflow. Use when user requests implementation (ru: реализуй, напиши, имплементируй, запили, сделай реализацию, запрогай, накодь; en: implement, code this, build this feature, write the code). Sonnet main thread orchestrates (triage, dispatching, polling, git, transitions). Codex Sol max writes the plan (ultra only when the user explicitly asks). Opus invoked as subagent for judgment (plan review loop cap=4, code review 4.1); Fable subagent is the judgment escalation tier (4.1 on SECURITY/DATA_LOSS phases or round 3+, BLOCKED diagnosis, impasse summaries; Opus fallback, never silent). Codex Luna max implements; fix rounds resume the implementer's own thread (--resume-task); Terra xhigh is the reasoning escalation. Codex Sol xhigh performs a control review on the diff after Opus review passes (fused loop cap=4). A Sonnet verification gate (lint/typecheck/affected tests) runs before every review round; multi-round reviews end with a synthesis record in docs/reviews/. Opus runs one final whole-branch review before plan archival (cap=2). Plan-marked parallel groups run as 2 concurrent tracks in git worktrees. Auto-commits on clean review unless user opts out. Routes trivial single-file edits to a Sonnet subagent instead.
+description: Multi-model subagent-driven workflow. Use when user requests implementation (ru: реализуй, напиши, имплементируй, запили, сделай реализацию, запрогай, накодь; en: implement, code this, build this feature, write the code). Sonnet main thread orchestrates (triage, dispatching, polling, git, transitions). An Opus subagent at max thinking effort writes the plan and its authorized revisions; Codex Sol max reviews the plan (loop cap=4, fresh task each round, ultra only when the user explicitly asks). Opus subagent also does code review 4.1; Fable subagent is the judgment escalation tier (4.1 on SECURITY/DATA_LOSS phases or round 3+, BLOCKED diagnosis, impasse summaries; Opus fallback, never silent). Codex Luna max implements; fix rounds resume the implementer's own thread (--resume-task); Terra xhigh is the reasoning escalation. Codex Sol xhigh performs a control review on the diff after Opus review passes (fused loop cap=4). A Sonnet verification gate (lint/typecheck/affected tests) runs before every review round; multi-round reviews end with a synthesis record in docs/reviews/. Opus runs one final whole-branch review before plan archival (cap=2). Plan-marked parallel groups run as 2 concurrent tracks in git worktrees. Auto-commits on clean review unless user opts out. Routes trivial single-file edits to a Sonnet subagent instead.
 ---
 
 # Dev Orchestrator
@@ -48,7 +48,7 @@ Both rules are **model-independent**. Opus on main does NOT get an exception to 
 
 ### Pre-flight gate (applies until you've dispatched a plan-writer/Opus/Explore/quickfix subagent)
 
-Every tool call in this skill — **not just the literal first one** — must be one of the list below, until you have dispatched the Codex plan writer, an Opus review subagent, a Fable diagnosis subagent (or its explicit Opus fallback), an Explore subagent, or a Sonnet quickfix subagent for the current task. "Gate passed" is a state unlocked by *that dispatch*, not by the fact that one turn has already happened in the skill. On the confirmed-resume path ("Before Step 1" item 4 — the user confirmed continuing an in-progress, already-approved plan) the first implementer dispatch (`"$DISPATCH" task` or the Claude implementer Agent call) disarms the gate the same way — resuming skips Steps 1–2, so no plan-writer/reviewer/diagnosis/Explore dispatch may ever come; and a write task already running for the current phase, found via `"$DISPATCH" status` after a compaction or session break, counts as that dispatch — the gate is passed, keep polling it.
+Every tool call in this skill — **not just the literal first one** — must be one of the list below, until you have dispatched the Opus plan writer, an Opus review subagent, a Fable diagnosis subagent (or its explicit Opus fallback), an Explore subagent, or a Sonnet quickfix subagent for the current task. "Gate passed" is a state unlocked by *that dispatch*, not by the fact that one turn has already happened in the skill. On the confirmed-resume path ("Before Step 1" item 4 — the user confirmed continuing an in-progress, already-approved plan) the first implementer dispatch (`"$DISPATCH" task` or the Claude implementer Agent call) disarms the gate the same way — resuming skips Steps 1–2, so no plan-writer/reviewer/diagnosis/Explore dispatch may ever come; and a write task already running for the current phase, found via `"$DISPATCH" status` after a compaction or session break, counts as that dispatch — the gate is passed, keep polling it.
 
 Specifically: if the user activated `/dev` with no task and you answered "what should I implement?", the gate is still armed. When the task arrives in the next user message, treat it as your first real action in the skill — the gate fires again from scratch. Same thing if any number of clarifying turns happen before the actual task lands. A plain text reply is not a "first tool call" that spends the gate.
 
@@ -61,9 +61,9 @@ Allowed tool calls while the gate is armed:
   - (c) the script-resolution snippet from "## Workspace scripts" verbatim, and invocations of the resolved `"$WS"`, `"$RPKG"`, `"$DISPATCH" status` — workspace/package/dispatch bookkeeping (only their one-line stdout enters context) — plus, on resume, `ls` / `find` on the directory a `"$WS"` call just printed (filenames only, to locate the last round's report and packages).
 
   Nothing else. Not `ls` (outside the printed `"$WS"` directory), not `cat`, not `grep` / `rg`, not `pytest`, not `python`, not `npm` / `pnpm` / `yarn`, not `make`, not `./anything`, not `tree`, not `wc`. Not `find` on source paths (`find .`, `find src/`, etc.). "Read-only" is NOT a justification — the gate is about *source familiarity*, not filesystem safety, and every one of those commands exists to let you skim the project. If you need to list or inspect anything beyond git bookkeeping or plan-file discovery, that's an Explore job.
-- The Step 1 plan-writer dispatch: `Write` of the scratch prompt file + `Bash` running `"$DISPATCH" task ...` per `./codex-plan-writer-prompt.md` (plus the wrapper-resolution snippet from `codex-invocation` immediately before it). **The dispatch disarms the gate.**
+- The Step 1 plan-writer dispatch: `Agent(subagent_type="general-purpose", model="opus", ...)` per `./opus-plan-writer-prompt.md`. **The dispatch disarms the gate.** (The Codex wrapper-resolution snippet from `codex-invocation` also stays allowed — it is `command -v` / `ls` bookkeeping, and Step 2's Codex plan-review dispatch needs `$DISPATCH` resolved.)
 - **Confirmed-resume path only** ("Before Step 1" item 4): `Edit` of the plan-file frontmatter and `git add <plan-file>` / `git commit` for the advance-bookkeeping commit; `Write` of the scratch prompt file for `--prompt-file`; `"$DISPATCH" task` / `"$DISPATCH" result`; `Read` of the ledger file; and `Monitor` polling of a running task. The resume path jumps straight to Step 3/4 — the implementer dispatch itself (or the already-running task found via `"$DISPATCH" status`) disarms the gate.
-- `Agent(subagent_type="general-purpose", model="opus" | "fable", ...)` — dispatch Opus (plan review) or Fable (diagnosis). **This call disarms the gate.**
+- `Agent(subagent_type="general-purpose", model="opus" | "fable", ...)` — dispatch Opus (plan writing, plan revision) or Fable (diagnosis). **This call disarms the gate.**
 - `Agent(subagent_type="Explore", ...)` — pre-plan research pass. **This call disarms the gate.**
 - `Agent(subagent_type="general-purpose", model="sonnet", ...)` — Sonnet quickfix for trivial triage. **This call disarms the gate.**
 - `AskUserQuestion` — ambiguous triage, clarification, explicit confirmation (see restrictions below).
@@ -80,11 +80,11 @@ If the user's message contains tables, candidate lists, effort estimates, number
 - Produce a "let me summarize your analysis and confirm" response before dispatch.
 - Offer your own opinion on priorities ("Мой взгляд: начать с X") before the plan writer has written the plan.
 
-The density of the user's message is a signal to dispatch the plan writer **harder**, not to engage with it yourself. Pass the user's message verbatim into `codex-plan-writer-prompt.md` — the plan writer (Codex Sol max) is the one who writes the plan, including the ordering. The ONLY questions you may raise via `AskUserQuestion` before dispatch are *genuine* blockers: missing repo path, two mutually exclusive interpretations of intent, irreversible side-effects you need consent for. A ranking question is never a genuine blocker.
+The density of the user's message is a signal to dispatch the plan writer **harder**, not to engage with it yourself. Pass the user's message verbatim into `opus-plan-writer-prompt.md` — the plan writer (Opus subagent, `ultrathink`) is the one who writes the plan, including the ordering. The ONLY questions you may raise via `AskUserQuestion` before dispatch are *genuine* blockers: missing repo path, two mutually exclusive interpretations of intent, irreversible side-effects you need consent for. A ranking question is never a genuine blocker.
 
 ## Role
 
-Your only jobs, in order: triage → resume-check → dispatch → poll → collect verdicts → bookkeeping (git + plan frontmatter) → transition to next phase → report. Judgment work (planning, reviewing, diagnosing `BLOCKED`) is delegated to subagents — the Codex Sol plan writer, Opus/Fable reviewers, and the Fable diagnosis subagent with explicit Opus fallback — not done on main.
+Your only jobs, in order: triage → resume-check → dispatch → poll → collect verdicts → bookkeeping (git + plan frontmatter) → transition to next phase → report. Judgment work (planning, reviewing, diagnosing `BLOCKED`) is delegated to subagents — the Opus plan writer, the Codex Sol plan reviewer, Opus/Fable code reviewers, and the Fable diagnosis subagent with explicit Opus fallback — not done on main.
 
 ## Protocol state line (every turn)
 
@@ -108,7 +108,7 @@ Conversation memory does not survive compaction. The plan file's YAML frontmatte
 
 Verdicts are machine-read from **line 1 only** of the result. Expected token sets:
 
-- Plan review (Step 2, Opus subagent): `APPROVED` | `CHANGES_REQUESTED`
+- Plan review (Step 2, Codex Sol max): `APPROVED` | `CHANGES_REQUESTED`
 - Opus review (Step 4.1) and Codex control review (Step 4.2): `REVIEW_OK` | `REVIEW_BLOCKING`
 - Final whole-branch review (Step 5): `REVIEW_OK` | `REVIEW_BLOCKING`
 - Implementer (Step 3 / fix rounds): `DONE` | `DONE_WITH_CONCERNS` | `NEEDS_CONTEXT` | `NEEDS_AUTHORIZATION` | `BLOCKED`
@@ -128,8 +128,9 @@ Never infer a verdict from prose, and never treat a missing token as approval �
 ## Model split (intended defaults; rules above hold regardless of what user actually runs)
 
 - **Main thread** — orchestration only. Intended default: Sonnet medium (cheap, fast enough for dispatching). If user runs Opus on main, the rules above still hold — you still orchestrate, you still never write code.
-- **Codex Sol max** (`--model gpt-5.6-sol --effort max`, with `--write`) — Step 1 plan writing and Step 2 plan revisions (revisions resume the writer's thread via `--resume-task`). **Never `--effort ultra` on your own initiative** — ultra (Sol's parallel-subagent mode, ~4× tokens) is used ONLY when the user explicitly asked for it in their own words; do not offer or recommend it.
-- **Opus subagent** — judgment default: Step 2 plan review, Step 4.1 code review (routine rounds), Step 5 final whole-branch review. Dispatched via `Agent(subagent_type="general-purpose", model="opus", prompt=...)`. Subagent has NO session context — prompt must be fully self-contained. **The prompt's literal first line MUST be `ultrathink`** (max thinking effort; the sibling prompt templates already start with it — keep it first).
+- **Opus plan-writer subagent** — Step 1 plan writing and Step 2 plan revisions (Mode B), per `./opus-plan-writer-prompt.md`. `Agent(subagent_type="general-purpose", model="opus", prompt=...)`, literal first line `ultrathink`. It researches the repo itself — that is the point of planning on Opus. Every dispatch is FRESH (a Claude subagent has no resumable thread): the plan file on disk plus the ledger are the continuity, so a revision never depends on remembering having written the plan.
+- **Codex Sol max** (`--model gpt-5.6-sol --effort max`, **no `--write`**) — Step 2 plan review, per `./codex-plan-reviewer-prompt.md`. FRESH task every round, never `--resume-task` — reviewer freshness is the same bias decision as Step 4.2. **Never `--effort ultra` on your own initiative** — ultra (Sol's parallel-subagent mode, ~4× tokens) is used ONLY when the user explicitly asked for it in their own words; do not offer or recommend it.
+- **Opus subagent** — judgment default: Step 4.1 code review (routine rounds) and Step 5 final whole-branch review. Dispatched via `Agent(subagent_type="general-purpose", model="opus", prompt=...)`. Subagent has NO session context — prompt must be fully self-contained. **The prompt's literal first line MUST be `ultrathink`** (max thinking effort; the sibling prompt templates already start with it — keep it first).
 - **Fable subagent** — top-tier judgment, escalation only (never the per-round default — it draws from the Max plan's 50% weekly Fable budget): Step 4.1 review when the phase carries SECURITY / DATA_LOSS materiality risks (auth, payments, destructive migrations — per the plan's Risks section) or when the fused loop reaches round 3+; BLOCKED diagnosis; escalation impasse summaries. Same Agent dispatch with `model: "fable"`, `ultrathink` first line. **Fallback rule**: if Fable is unavailable (weekly cap) or its classifier visibly falls back, use Opus and TELL THE USER — never a silent substitution.
 - **Codex Sol xhigh** (`--model gpt-5.6-sol --effort xhigh`, no `--write`) — Step 4.2: control review on the diff after Opus review returned clean.
 - **Codex Luna max** (`--model gpt-5.6-luna --effort max`, always `--write`) — Step 3 implementation for **non-frontend** phases, Step 4 fix rounds, and the Step 5 fix wave.
@@ -137,7 +138,7 @@ Never infer a verdict from prose, and never treat a missing token as approval �
 - **Claude frontend implementer subagent** — Step 3 for frontend-only phases. Opus for new UI / redesigns (prompt starts with `ultrathink`), Sonnet for simple tweaks. Subagent is instructed to use the `frontend-design` skill. See `./claude-frontend-implementer-prompt.md`.
 - **Sonnet quickfix subagent** — trivial path only.
 
-**Family rule**: writer and reviewer of the same artifact are never from the same model family. Sol writes the plan → Opus reviews it. Luna writes the code → Opus reviews it, Sol cross-checks.
+**Family rule**: writer and reviewer of the same artifact are never from the same model family. Opus writes the plan → Sol max reviews it. Luna writes the code → Opus reviews it, Sol xhigh cross-checks. The rule binds **per artifact**: Opus writing the plan and Opus reviewing the code (4.1 / Step 5) are separate fresh subagents with no shared context — what is forbidden is a model reviewing the artifact its own dispatch produced, and neither of those does.
 
 Codex is invoked via `companion.mjs --background` + Monitor poll — standard Agent/codex-rescue paths silently auto-reject on this machine. Read the `codex-invocation` skill before your first Codex call in a session.
 
@@ -168,8 +169,8 @@ Run this checklist on the assembled prompt BEFORE sending any subagent or Codex 
 2. **Absolute paths** for repo root, plan file, ledger file.
 3. **User's request verbatim** where the template asks for it — paste, never paraphrase.
 4. **Self-contained.** The subagent sees nothing from this session. Anything you "already said" or "already know" must be physically in the prompt.
-5. **Codex only:** `--background` present; `--model` + `--effort` match the role — plan writer = sol/max, control review = sol/xhigh, implementer = luna/max, reasoning escalation = terra/xhigh (never rely on the wrapper's default pin for protocol dispatches, and never `--effort ultra` unless the user explicitly asked); `--write` ONLY on plan-writer and implementation dispatches; resumes are thread-addressed — `--resume-task <task-id>` referencing the SAME role's prior dispatch (plan reviewer resumes plan reviewer, implementer resumes implementer; never cross roles, never `--resume-last`); Step 4 control review rounds 2+ are FRESH by design (see `codex-invocation` "Resume semantics"). Record every dispatched task id next to its role — you will need it for the resume.
-6. **Opus / Fable subagents only:** the prompt's literal first line is `ultrathink` (max thinking effort); the model matches the role — Opus for routine judgment, Fable only for the escalation cases listed in the Model split.
+5. **Codex only:** `--background` present; `--model` + `--effort` match the role — plan review = sol/max, control review = sol/xhigh, implementer = luna/max, reasoning escalation = terra/xhigh (never rely on the wrapper's default pin for protocol dispatches, and never `--effort ultra` unless the user explicitly asked); `--write` ONLY on implementation dispatches — no Codex role in the plan stage writes files any more; resumes are thread-addressed — `--resume-task <task-id>` referencing the SAME role's prior dispatch (implementer resumes implementer; never cross roles, never `--resume-last`); the Step 2 plan reviewer and Step 4.2 control reviewer are FRESH every round by design (see `codex-invocation` "Resume semantics"). Record every dispatched task id next to its role — you will need it for the resume.
+6. **Opus / Fable subagents only:** the prompt's literal first line is `ultrathink` (max thinking effort); the model matches the role — Opus for plan writing / revision and routine judgment, Fable only for the escalation cases listed in the Model split.
 7. **Round 2+ only:** ledger path present AND open ACCEPTED / PARTIALLY_ACCEPTED items inlined.
 8. **Review dispatches (4.1 / 4.2) only:** this round's freshly generated review package path is present (`[DIFF_FILE]` for 4.1, `<package-path>` for 4.2), the implementer's `[REPORT_FILE]` path is present, and `[GLOBAL_CONSTRAINTS]` is filled with the plan's `## Global Constraints` section copied verbatim — the reviewer's attention lens: exact values, exact formats, stated relationships between components; not process rules — those are already in the templates.
 9. **Anti-coaching scan (every reviewer dispatch — 4.1, 4.2, Step 5, Step 2).** Scan the assembled prompt text for these stop-phrases: "do not flag", "don't treat", "not a defect", "at most Minor", "Minor at most", "the plan chose", "ignore the". Any hit → delete the whole sentence containing it and re-scan. Exception: a sentence that references already-triaged ledger entries by id (`REJECTED_BY_SCOPE` / `DEFER`) is allowed — the ban is on pre-judging NEW findings, not on relaying settled triage.
@@ -201,7 +202,7 @@ AMBIGUOUS → Ask user once.
 
 Never guess on ambiguous cases — a wasted round trip costs more than one clarifying question.
 
-**Full-stack requests** (BE + FE in one task) go into the full protocol. The plan writer is required to split backend and frontend into **separate phases** with an explicit contract between them (see `codex-plan-writer-prompt.md`), so Step 3 can route each phase cleanly.
+**Full-stack requests** (BE + FE in one task) go into the full protocol. The plan writer is required to split backend and frontend into **separate phases** with an explicit contract between them (see `opus-plan-writer-prompt.md`), so Step 3 can route each phase cleanly.
 
 ## Before Step 1 — check for an in-progress plan
 
@@ -223,9 +224,9 @@ Never resume silently — always name the plan and wait for confirmation.
 
 ## Full protocol
 
-### Step 1 — Codex Sol max writes the plan
+### Step 1 — Opus subagent writes the plan
 
-Dispatch the Codex plan writer per `./codex-plan-writer-prompt.md` (Sol max, `--write`, `--prompt-file`). Relay user's original request verbatim + repo path + any constraints you know. Record the task id (role: plan writer) — Step 2 revisions resume it. Effort is `max`; `ultra` exists only when the user explicitly asked for it.
+Dispatch the Opus plan writer per `./opus-plan-writer-prompt.md` Mode A: `Agent(subagent_type="general-purpose", model="opus", prompt=...)`, literal first line `ultrathink`. Relay user's original request verbatim + repo path + any constraints you know. There is no task id to record — every writer dispatch is fresh, and Step 2 revisions carry their scope in the ledger instead of a thread. Keep the writer's returned summary in context: it is what you paste into the reviewer's `## Context` section, and each revision's per-ledger-item report is what fills the Step 2 follow-up template's "What the writer did with your prior blocking list".
 
 The plan writer writes `docs/plans/YYYY-MM-DD-<slug>.md` (or repo's custom path) with this format:
 
@@ -247,23 +248,25 @@ phases:
 
 Body sections: Goal · Files (by phase) · Contracts · Test strategy · Risks / unknowns · Phases (`## Ф1: <title>`, etc.).
 
-**The plan file is the single source of truth** across the entire protocol and across sessions. All subsequent Codex and Opus invocations read it by path.
+**The plan file is the single source of truth** across the entire protocol and across sessions. All subsequent Codex and Opus invocations read it by path — including the plan writer's own revision dispatches, which have no thread to remember it from.
 
 Pre-plan research (Explore subagent) is **required**, not optional, if any of the following is true: (a) the area is unfamiliar to you; (b) the user's request names failing tests / errors you haven't seen resolved in a prior turn; (c) you'd otherwise be tempted to open source files on main to "understand the task". Dispatch `Agent(subagent_type="Explore")` with a focused question (failing tests + specific files to investigate, or "map X feature"), then feed the report into the plan-writer prompt. Do not read production code on main to decide whether Explore is needed — if you're not sure, dispatch it.
 
+Scope Explore to what YOU need in order to fill the writer prompt — the entry points, the failing tests, the constraint you must state. The Opus writer explores the repo itself and verifies every path and signature it names, so a second full sweep is duplicated spend; Explore's job here is the starting map, not the whole survey.
+
 If the repo maintains `docs/ARCHI.md` (see the `architecture-memory` skill), tell the Explore subagent to start from it — a current architecture memory usually shrinks the Explore pass to verification of the relevant sections. Do NOT read ARCHI.md on main yourself: it is architecture content, i.e. research (Rule 2); you only pass its path along.
 
-### Step 2 — Opus reviews the plan (loop, cap=4)
+### Step 2 — Codex Sol max reviews the plan (loop, cap=4)
 
-Dispatch an Opus subagent using `./opus-plan-reviewer-prompt.md` (points the reviewer at the plan file — no embedded copy). Fresh subagent each round — the ledger, not thread memory, carries the round history.
+Dispatch Codex Sol max using `./codex-plan-reviewer-prompt.md` (`--model gpt-5.6-sol --effort max`, no `--write`, `--prompt-file`; the prompt points the reviewer at the plan file — no embedded copy). FRESH task each round, never `--resume-task` — the ledger, not thread memory, carries the round history.
 
 Verdict handling:
 - `APPROVED` → commit the plan file **separately** (subject: `docs(plans): add <slug>`, stage only the plan file, Co-Authored-By trailer, no push). Then Step 3.
 - `CHANGES_REQUESTED` → run the ledger sequence (see "## Authorized Change Ledger" for ledger shape and rules):
   - **(a) Triage.** Classify each reviewer finding's `class:` into a ledger `decision`. `MUST_FIX_NOW` and `REGRESSION_FROM_AUTHORIZED_FIX` map to `ACCEPTED` (or `PARTIALLY_ACCEPTED` if you accept only part of the change); the reviewer's `DEFER` / `NIT` / `REJECTED_BY_SCOPE` items map directly to ledger `decision`s of the same name. Exception: a finding labeled `plan-mandated` is NEVER triaged into `ACCEPTED` or `REJECTED_BY_SCOPE` — "the plan chose it" is not a triage basis. Record it as `ESCALATED_TO_HUMAN` and present it to the user: the finding + the plan text that mandates it + "which governs?". Do not dispatch a fix that contradicts the plan without the answer.
-  - **(b) Write/update ledger** at `docs/plans/<slug>.ledger.json` with this round's items — ids `P<round>-B<n>` (see "## Authorized Change Ledger" for the per-stage id scheme), reviewer `opus-plan`. If the file already exists from a prior round, first update those entries' `status` (`fixed` / `rejected` / `deferred`) based on what the latest plan revision did, then append the new round's entries.
-  - **(c) Dispatch the plan-writer revision.** Codex Sol max with `--resume-task <plan-writer-task-id>`, using `./codex-plan-writer-prompt.md` Mode B; pass the plan-file path, the ledger path (`docs/plans/<slug>.ledger.json`), and the open ACCEPTED / PARTIALLY_ACCEPTED items inline. The writer updates the plan file in place. If the revision returns `NEEDS_AUTHORIZATION: <ledger id> requires <extra change>...`, triage the requested extension: within the plan's scope and Non-goals → extend that item's `authorized_change` / `forbidden_expansions` in the ledger and re-dispatch the revision (same `--resume-task`) with the extended item inline; outside the plan's scope → record the item `ESCALATED_TO_HUMAN` and ask the user before any further dispatch.
-  - **(d) Re-dispatch a FRESH Opus reviewer** with the follow-up template from `./opus-plan-reviewer-prompt.md` — it carries the ledger path and the writer's revision report so the reviewer can verify each ACCEPTED item is addressed. Increment counter.
+  - **(b) Write/update ledger** at `docs/plans/<slug>.ledger.json` with this round's items — ids `P<round>-B<n>` (see "## Authorized Change Ledger" for the per-stage id scheme), reviewer `codex-plan`. If the file already exists from a prior round, first update those entries' `status` (`fixed` / `rejected` / `deferred`) based on what the latest plan revision did, then append the new round's entries.
+  - **(c) Dispatch the plan-writer revision.** A FRESH Opus subagent (`model: "opus"`, literal first line `ultrathink`), using `./opus-plan-writer-prompt.md` Mode B; pass the plan-file path, the ledger path (`docs/plans/<slug>.ledger.json`), the open ACCEPTED / PARTIALLY_ACCEPTED items inline, and the reviewer's BLOCKING lines behind those items verbatim as context. The writer re-reads the plan from disk and updates it in place. If the revision returns `NEEDS_AUTHORIZATION: <ledger id> requires <extra change>...`, triage the requested extension: within the plan's scope and Non-goals → extend that item's `authorized_change` / `forbidden_expansions` in the ledger and dispatch a fresh Mode B writer with the extended item inline; outside the plan's scope → record the item `ESCALATED_TO_HUMAN` and ask the user before any further dispatch.
+  - **(d) Re-dispatch a FRESH Codex Sol max reviewer** with the follow-up template from `./codex-plan-reviewer-prompt.md` — it carries the ledger path and the writer's revision report so the reviewer can verify each ACCEPTED item is addressed. Increment counter.
 **Loop-control checks — run IN ORDER after every `CHANGES_REQUESTED`, before dispatching a fix round. First match wins; if a check fires, stop and do what it says.**
 
 1. **Anti-pingpong filter.** Remove from the blocking list any item that repeats a point explicitly rejected with reasoning in a prior round — mark it `resolved-by-decision` in the ledger. If the list becomes empty after filtering, treat the verdict as `APPROVED` and proceed accordingly.
@@ -282,7 +285,7 @@ After the plan is approved and committed, before the first Step 3 dispatch, scan
 
 Findings → ONE batched `AskUserQuestion` covering all of them — each finding beside the plan text that mandates it, asking which governs — before execution begins, not one interrupt per discovery mid-plan. Nothing found → proceed to Step 3 WITHOUT comment (no "I checked the plan and found no issues"). The review loop remains the net for conflicts that only emerge from implementation.
 
-Plan edits the user accepts go through the existing ledger sequence (reviewer `"preflight"`, ids `PF-B<n>`) + a plan-writer revision dispatch (Codex Sol max, `--resume-task <plan-writer-task-id>`, `./codex-plan-writer-prompt.md` Mode B). Re-run the three checks once on the revised plan, then proceed.
+Plan edits the user accepts go through the existing ledger sequence (reviewer `"preflight"`, ids `PF-B<n>`) + a plan-writer revision dispatch (fresh Opus subagent, `./opus-plan-writer-prompt.md` Mode B). Re-run the three checks once on the revised plan, then proceed.
 
 ### Step 3 — implement the current phase
 
@@ -309,7 +312,7 @@ Implementer status (same shape from both paths):
 - `BLOCKED` — dispatch a Fable subagent to assess (`model: "fable"`, `ultrathink`; Opus fallback per the Model split rule; pass BLOCKED report + plan-file path). The diagnosis returns one of:
     1. More context needed → re-dispatch implementer with added context, same effort.
     2. Needs more reasoning → Codex path: re-dispatch with `--resume-task <implementer-task-id>` at Terra xhigh (`--model gpt-5.6-terra --effort xhigh`). Claude path: upgrade from Sonnet to Opus (with `ultrathink`); if already Opus, hand back to user.
-    3. Task too large → break into sub-phases; dispatch the plan writer (Codex Sol max, `--resume-task <plan-writer-task-id>`, Mode B) to edit the plan accordingly, re-run Step 2 on the plan change.
+    3. Task too large → break into sub-phases; dispatch the plan writer (fresh Opus subagent, `./opus-plan-writer-prompt.md` Mode B) to edit the plan accordingly, re-run Step 2 on the plan change.
     4. Plan is wrong → escalate to user.
 
 Never force the same model to retry without changes.
@@ -481,7 +484,7 @@ None of these are a routine "confirm?" prompt — they are real blockers.
 
 ## Parallel groups (two tracks max)
 
-The plan writer may mark 2 phases as a **parallel group** in the frontmatter (`parallel_group: G1` on both phases — see `writing-plans` / `codex-plan-writer-prompt.md` for the marking rules; canonical case: a BE+FE pair with a frozen contract). When the next pending phases share a `parallel_group`, run them as two concurrent tracks instead of sequentially. If you see 3+ phases in one group, run 2 at a time — the width cap is HARD (subscription rate limits + orchestrator attention).
+The plan writer may mark 2 phases as a **parallel group** in the frontmatter (`parallel_group: G1` on both phases — see `writing-plans` / `opus-plan-writer-prompt.md` for the marking rules; canonical case: a BE+FE pair with a frozen contract). When the next pending phases share a `parallel_group`, run them as two concurrent tracks instead of sequentially. If you see 3+ phases in one group, run 2 at a time — the width cap is HARD (subscription rate limits + orchestrator attention).
 
 Routing per track is unchanged: frontend-only phase → Claude frontend implementer subagent (Opus with `ultrathink` for new UI, Sonnet for tweaks); everything else → Codex implementer (Luna max). Codex+Codex, Codex+Claude, Claude+Claude are all valid pairs.
 
@@ -530,7 +533,7 @@ Routing per track is unchanged: frontend-only phase → Claude frontend implemen
 ```json
 {
   "id": "P<round>-B<n> | PF-B<n> | F<round>-B<n> | FR<round>-B<n>",
-  "reviewer": "opus-plan | preflight | opus-review | codex-control | opus-final",
+  "reviewer": "codex-plan | preflight | opus-review | codex-control | opus-final",
   "decision": "ACCEPTED | PARTIALLY_ACCEPTED | REJECTED_BY_SCOPE | DEFER | NIT | ESCALATED_TO_HUMAN",
   "authorized_change": "<exact allowed change, or null>",
   "forbidden_expansions": ["<optional>", "..."],
@@ -547,7 +550,7 @@ Routing per track is unchanged: frontend-only phase → Claude frontend implemen
 [
   {
     "id": "P1-B1",
-    "reviewer": "opus-plan",
+    "reviewer": "codex-plan",
     "decision": "ACCEPTED",
     "authorized_change": "Add a step to Ф2: invalidate the session cookie on password change",
     "forbidden_expansions": ["do not add a global session-revocation service"],
@@ -556,7 +559,7 @@ Routing per track is unchanged: frontend-only phase → Claude frontend implemen
   },
   {
     "id": "P1-B2",
-    "reviewer": "opus-plan",
+    "reviewer": "codex-plan",
     "decision": "PARTIALLY_ACCEPTED",
     "authorized_change": "Fix the Ф1/Ф3 signature mismatch for createUser() — align Ф3 to the Ф1 contract; do NOT redesign the contract",
     "forbidden_expansions": [],
@@ -565,7 +568,7 @@ Routing per track is unchanged: frontend-only phase → Claude frontend implemen
   },
   {
     "id": "P1-B3",
-    "reviewer": "opus-plan",
+    "reviewer": "codex-plan",
     "decision": "REJECTED_BY_SCOPE",
     "authorized_change": null,
     "forbidden_expansions": [],
@@ -587,7 +590,7 @@ In Phase Ф1 the ledger is documented and produced, but its `materiality` field 
 
 ## Reporting cadence
 
-- Entering each step: one line. Example: `Plan ready, sending to Opus for plan review (round 1/4)`.
+- Entering each step: one line. Example: `Plan ready, sending to Codex Sol max for plan review (round 1/4)`.
 - Each loop iteration: one line with verdict summary. Example: `Opus review round 2/4: REVIEW_BLOCKING (3 items). Dispatching the fixer (Luna max).`
 - Do **not** narrate polling ("still running...", "elapsed 40s").
 - End of turn: 1–2 sentences — what changed, what's next.
@@ -596,10 +599,10 @@ In Phase Ф1 the ledger is documented and produced, but its `materiality` field 
 
 - **Write production code, tests, or any source edit on the main thread** (Rule 1 at the top — repeated here because it's the one that gets broken). If you are reasoning towards "but this file is tiny / I already understand it / it's just the test part" — STOP and dispatch a subagent.
 - **Do research on main** — `Read`/`Grep` on source, running `pytest` / linters / build scripts, reading plan body beyond frontmatter (Rule 2). If you are reasoning towards "but I just need to see what's failing / what the current code looks like / what this error means" — STOP and dispatch Explore.
-- Do architectural judgment (plans, reviews, BLOCKED diagnosis) on main — dispatch the plan writer, the appropriate Opus/Fable reviewer, or the Fable diagnosis subagent with explicit Opus fallback.
+- Do architectural judgment (plans, reviews, BLOCKED diagnosis) on main — dispatch the Opus plan writer, the Codex Sol plan reviewer, the appropriate Opus/Fable code reviewer, or the Fable diagnosis subagent with explicit Opus fallback.
 - Offer, suggest, or default to `--effort ultra` — ultra is exclusively user-initiated. If the user didn't say "ultra", it does not exist.
 - `Agent(subagent_type="codex:codex-rescue", ...)` or `Bash("codex exec ...")` — both silently auto-reject.
-- `--resume-last` anywhere in this protocol — positional resume lands in whatever thread happens to be newest, regardless of role. All resumes are `--resume-task <task-id>` against the SAME role's prior dispatch; a wrong resume poisons the thread with another role's instructions. Control review rounds 2+ stay FRESH by design.
+- `--resume-last` anywhere in this protocol — positional resume lands in whatever thread happens to be newest, regardless of role. All resumes are `--resume-task <task-id>` against the SAME role's prior dispatch; a wrong resume poisons the thread with another role's instructions. The Step 2 plan review and control review rounds 2+ stay FRESH by design.
 - Skip Step 4.1 and go straight to 4.2 — Opus review is always first; Codex xhigh is a control, not primary.
 - Start (or resume) the fused review without a `GATE_OK` from Step 3.5 on the current tree state — reviewers read code; the gate is what proves the tree builds and its tests pass.
 - Run the verification gate on the main thread ("it's just pytest") — the gate is a dispatched Sonnet subagent, per Rule 2.
@@ -624,8 +627,8 @@ In Phase Ф1 the ledger is documented and produced, but its `materiality` field 
 
 ## Prompt templates (siblings)
 
-- `./codex-plan-writer-prompt.md` — Codex Sol max, plan writing / revision (Step 1 + Step 2 Mode B)
-- `./opus-plan-reviewer-prompt.md` — Opus subagent, plan review (Step 2)
+- `./opus-plan-writer-prompt.md` — Opus subagent (`ultrathink`), plan writing / revision (Step 1 + Step 2 Mode B)
+- `./codex-plan-reviewer-prompt.md` — Codex Sol max, plan review (Step 2)
 - `./implementer-prompt.md` — Codex Luna max, implementation + fix rounds (Step 3 / Step 4, non-frontend phases)
 - `./claude-frontend-implementer-prompt.md` — Claude subagent (Opus / Sonnet), implementation (Step 3, frontend-only phases)
 - `./verification-gate-prompt.md` — Sonnet subagent, verification gate (Step 3.5)
