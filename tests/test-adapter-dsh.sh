@@ -451,6 +451,50 @@ check("env conflicts: DSH_PERMISSION_MODE, DEEPSEEK_API_KEY; defaults are free",
   core.envConflicts({ DSH_PERMISSION_MODE: "danger-full-access", DEEPSEEK_API_KEY: "x", DSH_TELEMETRY_DISABLED: null, DSH_AGENTS_HOME: "/a" }, owned).join(",") === "DEEPSEEK_API_KEY,DSH_PERMISSION_MODE");
 '
 
+    node_checks "A2 launch guard" '
+const profile = { harness: "dsh", auth: "native", home: "user", sandbox: "off" };
+const req = { profile, write: false, job: { dir: "/data/jobs/dt-1", cwd: "/repo" } };
+const rows = (mode = "read-only", policy = "ask") => `- id: sandbox-policy\n  config:\n    mode: ${JSON.stringify(mode)}\n- id: approval-policy\n  config:\n    policy: ${JSON.stringify(policy)}\n`;
+const refusal = (stdout, extra = {}, result = {}) => {
+  let call = null;
+  const ctx = core.makeCtx({ env: { HOME: "/home/u" }, profile, profileName: "ds-x",
+    execHarness: (argv, options) => (call = { argv, options }, { status: 0, stdout, stderr: "", error: null, ...result }) });
+  try { dsh.beforeLaunch({ ...req, ...extra }, ctx); return { error: null, call }; }
+  catch (error) { return { error, call }; }
+};
+let got = refusal(rows());
+check("resolved read-only / ask passes using the materialized patch and an offline dump", !got.error &&
+  JSON.stringify(got.call.argv) === JSON.stringify(["--profile", "headless", "--patch", "/data/jobs/dt-1/dsh.patch.yml", "--dump-config"]) &&
+  got.call.options.timeoutMs === 60_000 && got.call.options.includeSecrets === true, got.error?.message ?? got.call);
+for (const [name, dump] of [
+  ["wider mode", rows("danger-full-access")], ["approval never", rows("read-only", "never")],
+  ["unknown mode", rows("future-mode")], ["missing rows", "not a config dump"],
+  ["missing approval", "- id: sandbox-policy\n  config: {\"mode\": \"read-only\"}\n"],
+  ["disabled sandbox", rows().replace("  config:", "  disabled: true\n  config:")],
+  ["enabled false sandbox", rows().replace("    mode:", "    enabled: false\n    mode:")],
+  ["duplicate row", rows() + "- id: sandbox-policy\n  config: {\"mode\": \"read-only\"}\n"],
+  ["unresolved expression", rows().replace("\"read-only\"", "${{ env.DSH_PERMISSION_MODE ?? \"workspace-write\" }}")],
+]) {
+  got = refusal(dump);
+  check(`${name} fails closed with launch class`, got.error?.errorClass === "launch" && /harness not started/.test(got.error.message), got.error?.message);
+}
+got = refusal(rows(), {}, { status: 1, stderr: "credential-from-native-config" });
+check("dump failure blocks the model turn without echoing native config diagnostics", got.error?.errorClass === "launch" &&
+  !got.error.message.includes("credential-from-native-config"), got.error?.message);
+for (const result of [{ signal: "SIGTERM" }, { timedOut: true }, { stopped: true }]) {
+  got = refusal(rows(), {}, result);
+  check(`an interrupted dump with status 0 still refuses launch (${Object.keys(result)[0]})`, got.error?.errorClass === "launch", got.error?.message);
+}
+got = refusal(rows("workspace-write"), { profile: { ...profile, sandbox: "native" }, write: true });
+check("native writer accepts workspace-write", !got.error, got.error?.message);
+got = refusal(rows("danger-full-access"), { profile: { ...profile, sandbox: "native" }, write: true });
+check("native writer rejects danger-full-access", got.error?.errorClass === "launch", got.error?.message);
+got = refusal("not checked", { write: true });
+check("unrestricted writer keeps its requested full access without a permission fence", !got.error && got.call === null, got);
+got = refusal(rows("workspace-write"), { resume: { sessionId: "previous" } });
+check("resume is checked by the same policy", got.error?.errorClass === "launch", got.error?.message);
+'
+
     node_checks "A3" '
 const ev = (o) => o;
 const session = ev({ type: "session", sessionId: "session-aaaa", cwd: "/repo" });
@@ -1170,17 +1214,91 @@ check("doctor: --dump-config runs through wrap too", levels(checks)["dsh-patch"]
     run_ad doctor --profile ds-key
     [[ "$OUT" == *"ok dsh-permissions ds-key: writer danger-full-access, reviewer read-only: --dump-config with DSH_PERMISSION_MODE=read-only shows sandbox-policy read-only"* ]]
     verdict "C2 doctor: dsh-permissions ok only from the dump (run with the reviewer's DSH_PERMISSION_MODE=read-only)" $? "$OUT"
-    # A user's ~/.dsh/cordis.patch.yml that pins the sandbox row: every reviewer job runs with that mode, and doctor says so.
+    # A home patch must not widen a bounded launch, including an existing session resumed after the patch changed.
+    finish --profile ds-rev --prompt-file "$prompt"
+    local c2_base="$JOB"
+    [[ "$ST" == completed ]]
+    verdict "C2 a normal read-only session completes before changing its home policy" $? "st=$ST $SJ"
+    local c2_condition
+    for c2_condition in presence value; do
+        CONDITION="$c2_condition" TEST_KEY="$KEY" node -e '
+const fs = require("node:fs");
+const path = require("node:path");
+const predicate = process.env.CONDITION === "presence" ? "env.DEEPSEEK_API_KEY" : `env.DEEPSEEK_API_KEY === ${JSON.stringify(process.env.TEST_KEY)}`;
+const expression = "${{ " + predicate + " ? \"danger-full-access\" : \"read-only\" }}";
+fs.writeFileSync(path.join(process.env.HOME, ".dsh", "cordis.patch.yml"), "- id: sandbox-policy\n  config: " + JSON.stringify({ mode: expression }) + "\n");'
+        # This is the stale preflight environment: it reports safe permissions without the job credential.
+        out="$(env -u DEEPSEEK_API_KEY "$DSH" --profile headless --dump-config)"
+        [[ "$out" == *'mode: "read-only"'* ]]
+        verdict "C2 key-$c2_condition conditional config looks read-only in a scrubbed dump" $? "$out"
+        rec="$TEST_ROOT/rec-c2-key-$c2_condition.json"
+        eff="$TEST_ROOT/eff-c2-key-$c2_condition.json"
+        AGENT_STUB_MODE=dump-key-output AGENT_STUB_RECORD="$rec" AGENT_STUB_EFFECTIVE="$eff" finish --profile ds-rev --prompt-file "$prompt"
+        [[ "$ST" == failed && "$(jfield job.errorClass <<<"$SJ")" == launch && ! -e "$rec" && ! -e "$eff" ]]
+        verdict "C2 preflight uses the actual key-$c2_condition environment and blocks the wider model turn" $? "st=$ST $SJ"
+        ! grep -qF "$KEY" "$JOBS/$JOB.log" "$JOBS/$JOB.json" "$JOBS/$JOB.json.terminal" && [[ "$SJ" != *"$KEY"* ]]
+        verdict "C2 key-$c2_condition dump stdout and stderr never expose the key in dispatcher state or logs" $? "job=$JOB"
+    done
+    rm -f "$HOME/.dsh/cordis.patch.yml"
+    rec="$TEST_ROOT/rec-c2-dump-key-fail.json"
+    eff="$TEST_ROOT/eff-c2-dump-key-fail.json"
+    AGENT_STUB_MODE=dump-key-fail AGENT_STUB_RECORD="$rec" AGENT_STUB_EFFECTIVE="$eff" finish --profile ds-rev --prompt-file "$prompt"
+    [[ "$ST" == failed && "$(jfield job.errorClass <<<"$SJ")" == launch && ! -e "$rec" && ! -e "$eff" ]] \
+        && ! grep -qF "$KEY" "$JOBS/$JOB.log" "$JOBS/$JOB.json" "$JOBS/$JOB.json.terminal" && [[ "$SJ" != *"$KEY"* ]]
+    verdict "C2 a failing dump may echo its key on either stream without persisting it or starting a model turn" $? "st=$ST $SJ"
     printf -- '- id: sandbox-policy\n  config: {"mode": "danger-full-access"}\n' >"$HOME/.dsh/cordis.patch.yml"
     rec="$TEST_ROOT/rec-c2l.json"
     eff="$TEST_ROOT/eff-c2l.json"
     AGENT_STUB_RECORD="$rec" AGENT_STUB_EFFECTIVE="$eff" finish --profile ds-rev --prompt-file "$prompt"
-    [[ "$ST" == completed && "$(ffield "$rec" env.DSH_PERMISSION_MODE)" == read-only && "$(ffield "$eff" permissionMode)" == danger-full-access ]]
-    verdict "C2 the stub models the layer: a reviewer job gets DSH_PERMISSION_MODE=read-only, yet runs danger-full-access" $? "st=$ST eff=$(ffield "$eff" permissionMode)"
+    [[ "$ST" == failed && "$(jfield job.errorClass <<<"$SJ")" == launch && -z "$(jfield job.childPid <<<"$SJ")" && ! -e "$rec" && ! -e "$eff" \
+        && "$(jfield job.note <<<"$SJ")" == *"cannot verify dsh read-only permissions"*"harness not started"* ]]
+    verdict "C2 danger-full-access home policy blocks a reviewer before the model-turn stub starts" $? "st=$ST $SJ"
+    AGENT_STUB_RECORD="$rec" AGENT_STUB_EFFECTIVE="$eff" finish --profile ds-rev --resume-task "$c2_base" --prompt-file "$prompt"
+    [[ "$ST" == failed && "$(jfield job.errorClass <<<"$SJ")" == launch && ! -e "$rec" && ! -e "$eff" ]]
+    verdict "C2 resume rechecks the changed home policy before starting the old session" $? "st=$ST $SJ"
+    TEST_ROOT="$TEST_ROOT" DSH="$DSH" node_checks "C2 probe guard" '
+const fs = await import("node:fs");
+const path = await import("node:path");
+const record = path.join(process.env.TEST_ROOT, "rec-c2-probe.json");
+const effective = path.join(process.env.TEST_ROOT, "eff-c2-probe.json");
+const profile = { harness: "dsh", auth: "native", home: "user", sandbox: "off", bin: process.env.DSH };
+const env = { ...process.env, AGENT_STUB_RECORD: record, AGENT_STUB_EFFECTIVE: effective };
+let refusal = null;
+try { await core.runProbe({ adapter: dsh, profileName: "ds-native", profile, env }); }
+catch (error) { refusal = error; }
+check("a direct probe with a wider home policy never starts the model-turn stub", refusal?.errorClass === "launch" &&
+  /harness not started/.test(refusal.message) && !fs.existsSync(record) && !fs.existsSync(effective), refusal?.message);
+'
+    AGENT_STUB_RECORD="$rec" AGENT_STUB_EFFECTIVE="$eff" finish --profile ds-sbx --write --prompt-file "$prompt"
+    [[ "$ST" == failed && "$(jfield job.errorClass <<<"$SJ")" == launch && ! -e "$rec" && ! -e "$eff" ]]
+    verdict "C2 native writer also refuses a home policy wider than workspace-write" $? "st=$ST $SJ"
+    AGENT_STUB_RECORD="$rec" AGENT_STUB_EFFECTIVE="$eff" finish --profile ds-key --write --prompt-file "$prompt"
+    [[ "$ST" == completed && "$(ffield "$eff" permissionMode)" == danger-full-access ]]
+    verdict "C2 writer with sandbox off preserves its explicit full-access mode" $? "st=$ST eff=$(ffield "$eff" permissionMode)"
     run_ad doctor --profile ds-rev
     [[ "$RC" -eq 1 && "$OUT" == *"FAIL dsh-permissions ds-rev: writer danger-full-access, reviewer NOT read-only:"*"sandbox-policy danger-full-access"*"$HOME/.dsh/cordis.patch.yml"* ]]
     verdict "C2 doctor: that layer → FAIL dsh-permissions naming the file, exit 1" $? "rc=$RC" "$OUT"
+    rm -f "$rec" "$eff"
+    printf -- '- id: sandbox-policy\n  config: {"mode": "workspace-write"}\n' >"$HOME/.dsh/cordis.patch.yml"
+    AGENT_STUB_RECORD="$rec" AGENT_STUB_EFFECTIVE="$eff" finish --profile ds-rev --prompt-file "$prompt"
+    [[ "$ST" == failed && "$(jfield job.errorClass <<<"$SJ")" == launch && ! -e "$rec" && ! -e "$eff" ]]
+    verdict "C2 workspace-write is still too wide for a reviewer" $? "st=$ST $SJ"
+    AGENT_STUB_RECORD="$rec" AGENT_STUB_EFFECTIVE="$eff" finish --profile ds-sbx --write --prompt-file "$prompt"
+    [[ "$ST" == completed && "$(ffield "$eff" permissionMode)" == workspace-write ]]
+    verdict "C2 native writer accepts a matching workspace-write home policy" $? "st=$ST eff=$(ffield "$eff" permissionMode)"
+    rm -f "$rec" "$eff"
+    printf -- '- id: approval-policy\n  config: {"policy": "never"}\n' >"$HOME/.dsh/cordis.patch.yml"
+    AGENT_STUB_RECORD="$rec" AGENT_STUB_EFFECTIVE="$eff" finish --profile ds-rev --prompt-file "$prompt"
+    [[ "$ST" == failed && "$(jfield job.errorClass <<<"$SJ")" == launch && ! -e "$rec" && ! -e "$eff" ]]
+    verdict "C2 approval never cannot silently override a bounded reviewer" $? "st=$ST $SJ"
+    printf -- '- id: sandbox-policy\n  config: {"mode": "future-mode"}\n' >"$HOME/.dsh/cordis.patch.yml"
+    AGENT_STUB_RECORD="$rec" AGENT_STUB_EFFECTIVE="$eff" finish --profile ds-rev --prompt-file "$prompt"
+    [[ "$ST" == failed && "$(jfield job.errorClass <<<"$SJ")" == launch && ! -e "$rec" && ! -e "$eff" ]]
+    verdict "C2 an unknown effective mode fails closed before a model turn" $? "st=$ST $SJ"
     rm -f "$HOME/.dsh/cordis.patch.yml"
+    AGENT_STUB_MODE=dump-fail AGENT_STUB_RECORD="$rec" AGENT_STUB_EFFECTIVE="$eff" finish --profile ds-rev --prompt-file "$prompt"
+    [[ "$ST" == failed && "$(jfield job.errorClass <<<"$SJ")" == launch && ! -e "$rec" && ! -e "$eff" ]]
+    verdict "C2 a failing offline dump cannot fall through into a reviewer model turn" $? "st=$ST $SJ"
 
     # --- C3. doctor --probe: one read-only PONG turn, no web tools ---
     rec="$TEST_ROOT/rec-c3.json"

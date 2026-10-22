@@ -45,6 +45,8 @@
 //   usage-error     a JSON error event (usage), exit 1, no session
 //   dancer          `--version` answers as Homebrew's dsh (Dancer's shell 0.25.10)
 //   dump-fail       `--dump-config` rejects the patch, exit 1
+//   dump-key-output `--dump-config` echoes its key on stdout and stderr (must never reach dispatcher logs)
+//   dump-key-fail   the same diagnostic output, then exit 1
 // Every run mode first checks the task (empty stdin is a usage error), the effort vocabulary of deepseek-official
 // (UNSUPPORTED_REASONING_EFFORT) and the key (MISSING_CREDENTIAL), as dsh does before any request [04b §5, §6].
 "use strict";
@@ -196,6 +198,15 @@ function effectiveRows(patches, cwd) {
       if ("disabled" in patch) row.disabled = patch.disabled;
     }
   }
+  // Test-only expression vocabulary, never eval: model the same Cordis env resolution for both an offline dump and
+  // a model turn. A preflight without the actual key would approve read-only, while the keyed run would be writable.
+  for (const row of rows.filter((entry) => entry.id === "sandbox-policy")) {
+    const conditional = /^\$\{\{ env\.DEEPSEEK_API_KEY(?: === "([^"]+)")? \? "danger-full-access" : "read-only" \}\}$/.exec(row.config?.mode ?? "");
+    if (conditional) {
+      const matches = conditional[1] === undefined ? Boolean(env.DEEPSEEK_API_KEY) : env.DEEPSEEK_API_KEY === conditional[1];
+      row.config.mode = matches ? "danger-full-access" : "read-only";
+    }
+  }
   return rows;
 }
 
@@ -319,6 +330,11 @@ const answerText = () => env.AGENT_STUB_RESPONSE || (state.resumed ? `DONE\nresu
 
 function dumpConfig(launcher) {
   if (launcher.dump !== "--dump-config") stubDie(`${launcher.dump} is not implemented`);
+  if (mode === "dump-key-output" || mode === "dump-key-fail") {
+    out(`# credential diagnostic: ${env.DEEPSEEK_API_KEY ?? "(missing)"}\n`);
+    err(`credential diagnostic: ${env.DEEPSEEK_API_KEY ?? "(missing)"}\n`);
+    if (mode === "dump-key-fail") process.exit(1);
+  }
   if (mode === "dump-fail") {
     err(`dsh: invalid patch ${launcher.patches.at(-1) ?? "-"}: row llm-deepseek: unknown field "reasoningEffort"\n`);
     process.exit(1);

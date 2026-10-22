@@ -18,8 +18,9 @@
 //                                   resolveSecret, cliPath });  then print startLine(profileName, id).
 //   startJob validates the prompt, resume, profile.env against the adapter's mandatory names, maxParallel across all
 //   workspaces and the write reservation — and only then, and only when the adapter asks for a key, calls
-//   resolveSecret(), so a refused task never runs keyCmd (spec §3.3, §3.5). It allocates <prefix>-NNNN, writes the key
-//   to a 0600 handoff file in the job dir and spawns the detached runner `node <cliPath> __run <id> <jobsDir> <token|->`.
+//   resolveSecret(), so a refused task never runs keyCmd (spec §3.3, §3.5). It allocates <prefix>-NNNN and hands the key
+//   to the detached runner over a private anonymous pipe (fd 3). The resolved value is never added to a job file,
+//   argv or the runner environment; the caller's existing environment remains inherited as before.
 //   A refusal throws UsageError (exit 2) and leaves no job behind. `profile` is the resolved profile object (defaults
 //   such as `home` already applied by the CLI). `resolveSecret` is `async () => string | null` over the profile's key
 //   source (key / keyEnv / keyCmd), or null for a profile without one; a UsageError it throws is the refusal as it
@@ -71,6 +72,9 @@
 //     invocation(req, ctx) → { argv, env, mandatoryEnv, secretEnv: [names], stdinPath, cwd, dirs, files,
 //                              inheritEnv?, meta? },
 //     probe?(req, ctx) → the same shape, for one "Reply with exactly: PONG" turn (default: invocation),
+//     beforeLaunch?(req, ctx) → void (or throw to refuse), after materialize; ctx.execHarness(args, {timeoutMs,
+//       graceMs, includeSecrets=false}) runs the discovered binary behind wrap in the job cwd; the default env
+//       omits its key, includeSecrets opts that same trusted binary into the exact harness env for config evaluation,
 //     reduce(io) → { ok, response, sessionId, usage, reportedModel, errorClass, errorText, meta? },
 //     finalize?(job, ctx) → null | partial reduce result,  resumeCheck?(prev, profile, req, ctx) → null | reason,
 //     scrub?(job, ctx) → [{ path, mode, content }] (the harness's own files rewritten with ctx.redact; keyed jobs only),
@@ -99,6 +103,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -378,36 +383,104 @@ function redactError(error, redact) {
 }
 
 // ---------- the key handoff (spec §3.5) ----------
-// task resolves the key in the foreground and writes it to <job dir>/secret (0600); the runner reads it, removes the
-// file as soon as the harness is spawned and puts the value only into the harness's environment. Any terminal
-// record also removes the file (finalizeRecord), so a job cancelled before its runner started leaves no copy.
+// task resolves the key in the foreground and sends a length-prefixed UTF-8 value over the runner's private fd 3.
+// The descriptor is closed before discovery and never inherited by a harness. A bounded reader rejects missing,
+// truncated or oversized handoffs; a keyed job never falls back to a file or another credential source.
+const SECRET_HANDOFF_FD = 3;
+const MAX_SECRET_HANDOFF_BYTES = 64 * 1024;
+const SECRET_HANDOFF_TIMEOUT_MS = 10_000;
 
 export const jobDir = (jobsDir, id) => path.join(jobsDir, id);
-export const secretFile = (jobsDir, id) => path.join(jobDir(jobsDir, id), "secret");
 
-export function writeSecretFile(jobsDir, id, value) {
-  const file = secretFile(jobsDir, id);
-  ensurePrivateDir(path.dirname(file));
-  fs.writeFileSync(file, value, { mode: 0o600, flag: "wx" });
-  fs.chmodSync(file, 0o600);
-  return file;
+// Only for cleanup of jobs created by older versions. New jobs never create this file.
+export function dropSecret(jobsDir, id) {
+  try {
+    fs.rmSync(path.join(jobDir(jobsDir, id), "secret"), { force: true });
+  } catch {
+    // best effort; a later terminal transition retries
+  }
 }
 
-export function readSecretFile(jobsDir, id) {
+function handoffPayload(secret) {
+  const size = Buffer.byteLength(secret);
+  if (size > MAX_SECRET_HANDOFF_BYTES) throw new UsageError("resolved key exceeds the private handoff limit (65536 bytes) errorClass=auth");
+  const payload = Buffer.allocUnsafe(size + 4);
+  payload.writeUInt32BE(size, 0);
+  payload.write(secret, 4, "utf8");
+  return payload;
+}
+
+function sendSecret(pipe, payload) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      pipe.destroy();
+      payload.fill(0);
+      if (error) reject(new Error("private key handoff failed; the harness was not started"));
+      else resolve();
+    };
+    const timer = setTimeout(() => done(new Error("timeout")), SECRET_HANDOFF_TIMEOUT_MS);
+    // Keep the listener for late EPIPE after finish; no OS diagnostic can carry the key.
+    pipe.on("error", done);
+    pipe.end(payload, () => done());
+  });
+}
+
+function openSecretPipe() {
   try {
-    const value = fs.readFileSync(secretFile(jobsDir, id), "utf8");
-    return value === "" ? null : value;
+    // Node's extra stdio pipes are sockets on the supported POSIX hosts. Never read a regular file that happens
+    // to occupy fd 3 when somebody invokes the internal runner by hand.
+    if (!fs.fstatSync(SECRET_HANDOFF_FD).isSocket()) return null;
+    return new Socket({ fd: SECRET_HANDOFF_FD, readable: true, writable: false });
   } catch {
     return null;
   }
 }
 
-export function dropSecret(jobsDir, id) {
-  try {
-    fs.rmSync(secretFile(jobsDir, id), { force: true });
-  } catch {
-    // best effort; a later terminal transition retries
-  }
+function receiveSecret(pipe, shouldStop) {
+  if (!pipe) return Promise.reject(new Error("private key handoff is missing; the harness was not started"));
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    let settled = false;
+    const done = (error, value = null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearInterval(poller);
+      pipe.destroy();
+      for (const chunk of chunks) chunk.fill(0);
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const invalid = () => done(new Error("private key handoff is missing, incomplete or invalid; the harness was not started"));
+    const timer = setTimeout(invalid, SECRET_HANDOFF_TIMEOUT_MS);
+    const poller = setInterval(() => { if (shouldStop()) invalid(); }, STOP_POLL_MS);
+    pipe.on("error", invalid);
+    pipe.on("close", () => { if (!settled) invalid(); });
+    pipe.on("data", (chunk) => {
+      size += chunk.length;
+      chunks.push(chunk);
+      if (size > MAX_SECRET_HANDOFF_BYTES + 4) invalid();
+    });
+    pipe.on("end", () => {
+      const payload = Buffer.concat(chunks);
+      try {
+        const count = payload.length >= 4 ? payload.readUInt32BE(0) : 0;
+        if (count === 0 || count > MAX_SECRET_HANDOFF_BYTES || count !== payload.length - 4) return invalid();
+        const secret = new TextDecoder("utf-8", { fatal: true }).decode(payload.subarray(4));
+        if (secret.trim() !== secret || /\s/.test(secret)) return invalid();
+        return done(null, secret);
+      } catch {
+        return invalid();
+      } finally {
+        payload.fill(0);
+      }
+    });
+  });
 }
 
 // ---------- key input (for `key set`) ----------
@@ -495,9 +568,8 @@ function writeRecord(file, record) {
 }
 
 // Terminal statuses are sticky: a completed / failed / cancelled record is never rewritten by anyone but its claimer,
-// also when two finalizers (cancel and the runner) race — exactly one claim succeeds. The claim also removes the key
-// handoff file, and so does every later call on the terminal record: a launch can write that file after a cancel
-// claimed the job, and no runner starts a harness for a terminal record.
+// also when two finalizers (cancel and the runner) race — exactly one claim succeeds. The claim and later calls also
+// remove any legacy key handoff file from a job created by an older runtime.
 export function finalizeRecord(file, patch) {
   const current = readRecord(file);
   if (!current || TERMINAL.has(current.status)) {
@@ -2221,6 +2293,18 @@ function materialize(plan, { profile, secret, redact, env }) {
   return { argv, env: childEnv };
 }
 
+// The adapter can inspect the harness's effective configuration after its generated files exist, before an agent
+// ever runs. Preflight defaults to a key-free environment; includeSecrets explicitly selects the exact harness
+// environment when configuration depends on credential variables. Neither mode allows an arbitrary cwd/env.
+async function beforeLaunch(adapter, req, ctx, plan, run, redact) {
+  if (typeof adapter.beforeLaunch !== "function") return;
+  const harnessEnv = Object.fromEntries(Object.entries(run.env).filter(([name, value]) => !plan.secretEnv.includes(name) && !holdsSecret(value, redact)));
+  const bin = [...(req.profile.wrap ?? []), plan.argv[0]];
+  const execHarness = (args = [], { timeoutMs = EXEC_TIMEOUT_MS, graceMs = EXEC_GRACE_MS, includeSecrets = false } = {}) =>
+    ctx.exec(bin[0], [...bin.slice(1), ...args], { timeoutMs, graceMs, cwd: plan.cwd, env: includeSecrets === true ? run.env : harnessEnv });
+  await adapter.beforeLaunch(req, { ...ctx, env: harnessEnv, execHarness });
+}
+
 // An adapter's meta object as the record keeps it: JSON only, redacted, at most META_MAX_CHARS; null when empty.
 function cleanMeta(value, redact) {
   if (!isObject(value) || Object.keys(value).length === 0) return null;
@@ -2397,6 +2481,8 @@ async function startJobUnredacted({ adapter, profileName, profile, role, write, 
   let handedOff = false;
   let announced = false; // a runner may exist: from here on the job is finalized, never discarded
   let spawned = false; // a runner process was started
+  let payload = null;
+  let secretPipe = null;
   try {
     const record = updateRunning(file, {
       sessionId: prev ? prev.sessionId : newSessionId(adapter, id),
@@ -2440,7 +2526,7 @@ async function startJobUnredacted({ adapter, profileName, profile, role, write, 
     ensurePrivateDir(dir);
     writePrivateFile(path.join(dir, "prompt.md"), prompt.bytes);
     if (secret !== null) {
-      writeSecretFile(ws.jobsDir, id, secret);
+      payload = handoffPayload(secret);
       if (!updateRunning(file, { hasSecret: true })) throw new Error(`job ${id} became terminal before it started`);
     }
     appendLog(log, `task ${id}: profile ${profileName} harness ${adapter.id} write=${write ? "yes" : "no"}${prev ? ` resumeOf=${prev.id}` : ""}`);
@@ -2453,7 +2539,7 @@ async function startJobUnredacted({ adapter, profileName, profile, role, write, 
       runner = spawn(process.execPath, [cliPath, RUN_VERB, id, ws.jobsDir, reservation?.token ?? "-"], {
         cwd: ws.root,
         detached: true,
-        stdio: ["ignore", logFd, logFd],
+        stdio: ["ignore", logFd, logFd, payload ? "pipe" : "ignore"],
         env: env[STATE_DIR_VAR] ? { ...env, [STATE_DIR_VAR]: stateRoot(env) } : env,
       });
     } finally {
@@ -2461,9 +2547,13 @@ async function startJobUnredacted({ adapter, profileName, profile, role, write, 
     }
     if (!runner.pid) throw new Error(`failed to start the runner for ${id}`);
     spawned = true;
+    secretPipe = runner.stdio[SECRET_HANDOFF_FD];
     if (reservation && !updateReservation(reservation.file, reservation.token, runner.pid, processStart(runner.pid))) {
       throw new Error(`workspace reservation was lost before the runner started for ${id}`);
     }
+    // A slow-loading runner can read the buffered handoff later; only flushing to the private pipe is awaited.
+    // Nothing is kept on disk while it initializes. An early cancel closes the other end and fails closed.
+    if (payload) await sendSecret(secretPipe, payload);
     runner.unref();
     handedOff = true;
     return { id, jobsDir: ws.jobsDir, workspaceRoot: ws.root };
@@ -2475,12 +2565,12 @@ async function startJobUnredacted({ adapter, profileName, profile, role, write, 
         finalizeRecord(file, { status: "failed", errorClass: "launch", note: redact(error?.message ?? String(error)) });
         if (!spawned) markCleaned(file); // no runner, no harness: nothing to stop (a spawned runner marks it itself)
       }
-      // No runner will ever read or remove the handoff file — also when a cancel claimed the job before it was
-      // written, so that claim never saw it.
       if (!spawned) dropSecret(ws.jobsDir, id);
     }
     throw error;
   } finally {
+    secretPipe?.destroy();
+    payload?.fill(0);
     if (!handedOff && reservation) releaseReservation(reservation.file, reservation.token);
   }
 }
@@ -2529,6 +2619,7 @@ export async function runJob({ id, jobsDir, token, adapters = {}, env = process.
   };
   let redact = redactor();
   let teardown = null; // runCli's, once the harness ran
+  const secretPipe = before.hasSecret ? openSecretPipe() : null;
   const fail = (errorClass, note) => {
     const text = redact(note);
     const after = finalizeRecord(file, { status: "failed", errorClass, note: text });
@@ -2550,8 +2641,11 @@ export async function runJob({ id, jobsDir, token, adapters = {}, env = process.
     if (!adapter) return fail("launch", `no adapter for harness ${record.harness}`);
     let secret = null;
     if (record.hasSecret) {
-      secret = readSecretFile(jobsDir, id);
-      if (!secret) return fail("auth", "the key handoff file is missing or empty; the harness was not started");
+      try {
+        secret = await receiveSecret(secretPipe, () => isTerminalNow(file));
+      } catch (error) {
+        return fail("auth", error.message);
+      }
       redact = redactor([secret]);
     }
     const profile = isObject(record.profileConfig) ? record.profileConfig : {};
@@ -2571,6 +2665,7 @@ export async function runJob({ id, jobsDir, token, adapters = {}, env = process.
     try {
       plan = await planInvocation(adapter, req, ctx);
       run = materialize(plan, { profile, secret, redact, env });
+      await beforeLaunch(adapter, req, ctx, plan, run, redact);
     } catch (error) {
       return fail(failClass(error), `adapter ${adapter.id}: ${error?.message ?? error}`);
     }
@@ -2597,7 +2692,6 @@ export async function runJob({ id, jobsDir, token, adapters = {}, env = process.
         // First the claim file, which a terminal claim does not freeze: if this runner dies from here on, cancel and
         // the reaper still find the harness by its verified identity.
         updateRunnerFile(file, { childPid: pid, childStartedAt: startedAt });
-        dropSecret(jobsDir, id); // the key now lives only in the harness's environment
         if (updateRunning(file, { childPid: pid, childStartedAt: startedAt })) return null;
         return stopLabel(); // claimed terminal (cancelled) before the harness started
       },
@@ -2667,6 +2761,7 @@ export async function runJob({ id, jobsDir, token, adapters = {}, env = process.
     // Unexpected: the record must not stay running, and the message must not carry the key.
     return fail("crash", `runner error: ${error?.message ?? error}`);
   } finally {
+    secretPipe?.destroy();
     dropSecret(jobsDir, id);
     // The cleanup is done only when the harness's teardown reported neither a survivor nor an error and nothing the
     // ownership log names is left (a group just SIGKILLed gets a moment to be reaped). Then the reservation goes and
@@ -2786,6 +2881,7 @@ export async function runProbe({
     const plan = await planInvocation(adapter, req, ctx, { probe: true });
     await ensureKey(plan.secretEnv);
     const run = materialize(plan, { profile, secret, redact, env });
+    await beforeLaunch(adapter, req, ctx, plan, run, redact);
     const timeoutMin = positiveNumber(profile.timeoutMin, DEFAULT_TIMEOUT_MIN, `profile ${profileName}: timeoutMin`);
     const result = await runCli({
       argv: run.argv,

@@ -592,7 +592,7 @@ console.log(JSON.stringify(env), threw);')"
         echo "    got: $out"
     fi
 
-    # --- 7. the key: handed over in a 0600 file, removed after spawn, only in the harness env, redacted everywhere ---
+    # --- 7. the key: anonymous-pipe handoff, only in the harness env, redacted everywhere ---
     local SECRET="sk-test-$$-a1b2c3d4e5f6g7h8"
     local keyed='{"harness":"plain","auth":{"keyEnv":"TEST_SECRET"}}'
     rec="$TEST_ROOT/secret.json"
@@ -620,20 +620,69 @@ process.exit(r.env.PLAIN_API_KEY === process.env.S && !("TEST_SECRET" in r.env) 
         grep -n "leaked" "$JOBS/$id.log" | head -3
     fi
     if [[ ! -e "$JOBS/$id/secret" && "$(jfield job.hasSecret <<<"$status_json")" == true ]]; then
-        pass "7 the handoff file is gone once the job ran"
+        pass "7 a keyed job has no handoff file"
     else
-        fail "7 the handoff file is gone once the job ran"
+        fail "7 a keyed job has no handoff file"
     fi
     id="$(TEST_SECRET="$SECRET" AGENT_STUB_MODE=hang start_task --profile keyed --profile-json "$keyed" --prompt-file "$prompt")"
     child="$(wait_child "$id")"
     ps -A -o args= >"$TEST_ROOT/ps-args.txt"
     if [[ -n "$child" && ! -e "$JOBS/$id/secret" ]] && ! grep -Fq "$SECRET" "$TEST_ROOT/ps-args.txt" && grep -Fq "$JOBS" "$TEST_ROOT/ps-args.txt"; then
-        pass "7 while the harness runs: the handoff file is already removed and no process argv (runner, harness) holds the key"
+        pass "7 while the harness runs: no key file exists and no process argv (runner, harness) holds the key"
     else
-        fail "7 while the harness runs: the handoff file is already removed and no process argv (runner, harness) holds the key"
+        fail "7 while the harness runs: no key file exists and no process argv (runner, harness) holds the key"
         echo "    child=$child secret-file=$([[ -e "$JOBS/$id/secret" ]] && echo present || echo absent)"
     fi
     ad cancel "$id" >/dev/null
+    # Delay before runJob (and therefore before reading fd 3): the foreground must return with the key buffered in
+    # the anonymous pipe, not persisted until the runner is ready. Then verify the same transfer still works.
+    local key_barrier="$TEST_ROOT/key-startup-barrier" startup_id startup_rec="$TEST_ROOT/key-startup.json"
+    t0="$(now_ms)"
+    startup_id="$(TEST_SECRET="$SECRET" CORE_HARNESS_RUN_BARRIER="$key_barrier" AGENT_STUB_RECORD="$startup_rec" start_task --profile keyed --profile-json "$keyed" --prompt-file "$prompt")"
+    t1="$(now_ms)"
+    ps -A -o args= >"$TEST_ROOT/key-startup-argv.txt"
+    if [[ -n "$startup_id" && $((t1 - t0)) -lt 5000 && ! -e "$startup_rec" && ! -e "$JOBS/$startup_id/secret" ]] \
+        && ! grep -rFq "$SECRET" "$STATE" && ! grep -Fq "$SECRET" "$TEST_ROOT/key-startup-argv.txt"; then
+        pass "7 a delayed runner returns promptly with no key in argv, job files, records or logs before reading the pipe"
+    else
+        fail "7 a delayed runner returns promptly with no key in argv, job files, records or logs before reading the pipe"
+    fi
+    touch "$key_barrier"
+    st="$(wait_status "$startup_id" 'completed|failed|cancelled' 20)"
+    if [[ "$st" == completed ]] && REC="$startup_rec" S="$SECRET" node -e 'const r=JSON.parse(require("node:fs").readFileSync(process.env.REC));process.exit(r.env.PLAIN_API_KEY===process.env.S?0:1);'; then
+        pass "7 a slow-starting runner receives the buffered pipe key after the foreground exits"
+    else
+        fail "7 a slow-starting runner receives the buffered pipe key after the foreground exits"
+    fi
+    rm -f "$key_barrier"
+    startup_id="$(TEST_SECRET="$SECRET" CORE_HARNESS_RUN_BARRIER="$key_barrier" AGENT_STUB_RECORD="$TEST_ROOT/key-cancel.json" start_task --write --profile keyed --profile-json "$keyed" --prompt-file "$prompt")"
+    ad cancel "$startup_id" >"$TEST_ROOT/key-cancel.out" 2>&1 &
+    local key_cancel_pid=$!
+    wait_status "$startup_id" 'cancelled' 20 >/dev/null
+    touch "$key_barrier"
+    wait "$key_cancel_pid"
+    st="$(wait_status "$startup_id" 'cancelled' 20)"
+    id="$(AGENT_STUB_MODE=ok start_task --write --profile p1 --profile-json '{"harness":"plain","auth":"none"}' --prompt-file "$prompt")"
+    if [[ "$st" == cancelled && ! -e "$TEST_ROOT/key-cancel.json" && ! -e "$JOBS/$startup_id/secret" && "$(wait_status "$id" 'completed|failed|cancelled' 20)" == completed ]] \
+        && ! grep -rFq "$SECRET" "$STATE"; then
+        pass "7 cancel before the pipe is read leaves no key file or harness, releases the writer, and an auth=none task needs no handoff"
+    else
+        fail "7 cancel before the pipe is read leaves no key file or harness, releases the writer, and an auth=none task needs no handoff"
+    fi
+    # Exercise a handoff at the maximum accepted length: closing the parent's endpoint must preserve every byte
+    # already queued to the socket, and the complete value must still be known to stream redaction.
+    id="$(AGENT_STUB_MODE=leak-secret core_js '
+const { default: plain } = await import(pathToFileURL(process.argv[1]).href);
+const job = await core.startJob({ adapter: plain, profileName: "longkey", profile: { harness: "plain", auth: { key: "fixture" } }, cwd: process.argv[2], promptFile: process.argv[3], cliPath: process.argv[4], resolveSecret: () => "q".repeat(65536) });
+console.log(job.id);' "$FIX/adapters/plain.mjs" "$repo" "$prompt" "$HARNESS")"
+    st="$(wait_status "$id" 'completed|failed|cancelled' 20)"
+    result_out="$(ad result "$id")"
+    if [[ "$st" == completed && "$result_out" == *"key=<redacted>"* && ! -e "$JOBS/$id/secret" ]] && ! grep -rq 'qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq' "$STATE"; then
+        pass "7 a full 64 KiB handoff survives parent exit and stays redacted without any key file"
+    else
+        fail "7 a full 64 KiB handoff survives parent exit and stays redacted without any key file"
+        echo "    id=$id status=$st"
+    fi
     # The key refusals are the core's (the harness hands the raw value over): exit 2, errorClass=auth, no job left.
     key_refusal() {
         local label="$1" needle="$2" pj="$3"
@@ -719,7 +768,7 @@ process.exit(r.env.PLAIN_API_KEY === process.env.S && !("TEST_SECRET" in r.env) 
         fail "7 a write task refused for its key after it took the reservation releases the reservation: the next write task runs"
         echo "    exit=$rc err=$err next=$st"
     fi
-    # A record that expects a handed-over key whose file is missing: the runner refuses to start the harness.
+    # A keyed record with no inherited pipe fails closed, even if a legacy secret file exists.
     rec="$TEST_ROOT/nokey.json"
     rm -f "$rec"
     REPO="$repo" JOBS="$JOBS" PROMPT="$prompt" node -e '
@@ -731,31 +780,53 @@ fs.writeFileSync(`${process.env.JOBS}/${id}.json`, JSON.stringify({ id, status: 
   write: false, sessionId: "s", resumeOf: null, workspaceRoot: process.env.REPO, cwd: process.env.REPO,
   promptPath: `${process.env.JOBS}/${id}/prompt.md`, promptBytes: 10, runnerPid: null, childPid: null,
   startedAt: new Date().toISOString(), timeoutMin: 1, cancelLadder: [["SIGTERM", 1000], ["SIGKILL", 0]], hasSecret: true,
-  profileConfig: { harness: "plain", auth: { keyEnv: "TEST_SECRET" } } }));'
+  profileConfig: { harness: "plain", auth: { keyEnv: "TEST_SECRET" } } }));
+fs.writeFileSync(`${process.env.JOBS}/${id}/secret`, "legacy-key-must-not-be-used");'
     rc=0
     AGENT_STUB_MODE=ok AGENT_STUB_RECORD="$rec" ad __run pt-0500 "$JOBS" - >/dev/null 2>&1 || rc=$?
     sj="$(ad status pt-0500 --json)"
     if [[ "$rc" -eq 1 && "$(jfield job.status <<<"$sj")" == failed && "$(jfield job.errorClass <<<"$sj")" == auth && "$(jfield job.note <<<"$sj")" == *"handoff"* && ! -e "$rec" ]]; then
-        pass "7 hasSecret without a handoff file: failed/auth and the harness is never started"
+        pass "7 hasSecret without its private pipe: failed/auth, no legacy-file fallback, the harness is never started"
     else
-        fail "7 hasSecret without a handoff file: failed/auth and the harness is never started"
+        fail "7 hasSecret without its private pipe: failed/auth, no legacy-file fallback, the harness is never started"
         echo "    exit=$rc $(jfield job.status <<<"$sj")/$(jfield job.errorClass <<<"$sj") note=$(jfield job.note <<<"$sj")"
     fi
-    out="$( (umask 000 && core_js '
+    out="$(CORE_CASE_HARNESS="$HARNESS" CORE_CASE_JOBS="$JOBS" CORE_CASE_RECORD="$rec" core_js '
 const fs = await import("node:fs");
-const f = core.writeSecretFile(process.argv[1], "pt-0001", "abc");
+const { spawn } = await import("node:child_process");
+const jobs = process.env.CORE_CASE_JOBS;
+const template = JSON.parse(fs.readFileSync(`${jobs}/pt-0500.json`, "utf8"));
+const results = [];
+for (const [id, bytes] of [["pt-0501", Buffer.from([0, 0])], ["pt-0502", Buffer.from([0, 1, 0, 1])], ["pt-0503", Buffer.from([0, 0, 0, 2, 120])], ["pt-0504", Buffer.from([0, 0, 0, 1, 255])]]) {
+  fs.mkdirSync(`${jobs}/${id}`, { recursive: true });
+  fs.writeFileSync(`${jobs}/${id}.json`, JSON.stringify({ ...template, id, status: "running", errorClass: null, note: null, runnerPid: null }));
+  const child = spawn(process.execPath, [process.env.CORE_CASE_HARNESS, "__run", id, jobs, "-"], { stdio: ["ignore", "ignore", "ignore", "pipe"], env: { ...process.env, AGENT_STUB_RECORD: process.env.CORE_CASE_RECORD } });
+  child.stdio[3].on("error", () => {});
+  child.stdio[3].end(bytes);
+  const code = await new Promise((resolve) => child.on("close", resolve));
+  const record = core.readRecord(`${jobs}/${id}.json`);
+  results.push(code === 1 && record.status === "failed" && record.errorClass === "auth" && record.note.includes("handoff"));
+}
+console.log(JSON.stringify(results), fs.existsSync(process.env.CORE_CASE_RECORD));')"
+    if [[ "$out" == '[true,true,true,true] false' ]]; then
+        pass "7 truncated header, oversized length, truncated key and invalid UTF-8 on the private pipe fail/auth before launch"
+    else
+        fail "7 truncated header, oversized length, truncated key and invalid UTF-8 on the private pipe fail/auth before launch"
+        echo "    got: $out"
+    fi
+    out="$(core_js '
 const r = core.redactor(["k\"ey\\x", "short"]);
 const text = r(`a k"ey\\x b ${JSON.stringify("k\"ey\\x")} c short d`);
-console.log((fs.statSync(f).mode & 0o777).toString(8), (fs.statSync(`${process.argv[1]}/pt-0001`).mode & 0o777).toString(8), text);' "$TEST_ROOT/secret-unit") )"
-    if [[ "$out" == '600 700 a <redacted> b "<redacted>" c <redacted> d' ]]; then
-        pass "7 writeSecretFile is 0600 in a 0700 job dir even under umask 000; redactor catches raw and JSON-escaped forms"
+console.log(text);')"
+    if [[ "$out" == 'a <redacted> b "<redacted>" c <redacted> d' ]]; then
+        pass "7 redactor catches raw and JSON-escaped forms"
     else
-        fail "7 writeSecretFile is 0600 in a 0700 job dir even under umask 000; redactor catches raw and JSON-escaped forms"
+        fail "7 redactor catches raw and JSON-escaped forms"
         echo "    got: $out"
     fi
     # A cancel that lands while the key is resolved (a keyCmd waiting on a password manager): its claim finds no
-    # handoff file yet, the launch writes one after it and then fails; no runner will ever read it, so the launch
-    # removes it. startJob is driven directly; resolveSecret runs the cancel in another process before it returns.
+    # handoff yet and the launch stops before spawning. startJob is driven directly; resolveSecret runs the cancel
+    # in another process before it returns.
     local KC_SECRET="sk-test-$$-cancelled-q1w2e3r4"
     out="$(KC_SECRET="$KC_SECRET" core_js '
 const fs = await import("node:fs");
@@ -781,11 +852,46 @@ console.log(JSON.stringify({ id, thrown, status: record?.status ?? null, secret:
         "$HARNESS" "$FIX/adapters/plain.mjs" "$repo" "$prompt" 2>&1)"
     if [[ "$(jfield thrown <<<"$out")" == *"became terminal before it started"* && "$(jfield status <<<"$out")" == cancelled \
         && "$(jfield secret <<<"$out")" == false ]] && ! grep -rFq "$KC_SECRET" "$STATE"; then
-        pass "7 a cancel while the key is resolved: startJob throws, the job stays cancelled, and the handoff file written after that claim is removed (the key is in no state file)"
+        pass "7 a cancel while the key is resolved: startJob throws, the job stays cancelled, and the key is in no state file"
     else
-        fail "7 a cancel while the key is resolved: startJob throws, the job stays cancelled, and the handoff file written after that claim is removed (the key is in no state file)"
+        fail "7 a cancel while the key is resolved: startJob throws, the job stays cancelled, and the key is in no state file"
         echo "    got: ${out//$KC_SECRET/<SECRET>}"
         grep -rlF "$KC_SECRET" "$STATE" | head -3
+    fi
+
+    # The post-materialization hook runs with a bounded wrapper over the same harness, without its credential.
+    # An intentional refusal proves it runs on every launch path, not only during foreground validation.
+    local preflight_good='{"harness":"plain","checkBeforeLaunch":true,"checkBeforeLaunchAlias":true,"wrap":["env","WRAPPED=yes"],"auth":{"keyEnv":"TEST_SECRET"}}'
+    local preflight_bad='{"harness":"plain","checkBeforeLaunch":"reject","wrap":["env","WRAPPED=yes"],"auth":{"keyEnv":"TEST_SECRET"}}'
+    local preflight_base
+    preflight_base="$(TEST_SECRET="$SECRET" AGENT_ENV_PASSTHROUGH="$AGENT_ENV_PASSTHROUGH,TEST_SECRET" AGENT_STUB_MODE=ok start_task --profile preflight --profile-json "$preflight_good" --prompt-file "$prompt")"
+    if [[ "$(wait_status "$preflight_base" 'completed|failed|cancelled' 20)" == completed ]]; then
+        pass "7 beforeLaunch defaults to sanitized env; exact-env opt-in includes key+alias behind wrap, env/cwd overrides are ignored"
+    else
+        fail "7 beforeLaunch defaults to sanitized env; exact-env opt-in includes key+alias behind wrap, env/cwd overrides are ignored"
+    fi
+    local preflight_kind
+    for preflight_kind in fresh resume; do
+        local preflight_args=(--fresh)
+        [[ "$preflight_kind" == resume ]] && preflight_args=(--resume-task "$preflight_base")
+        rec="$TEST_ROOT/preflight-$preflight_kind.json"
+        id="$(TEST_SECRET="$SECRET" AGENT_STUB_RECORD="$rec" start_task --profile preflight --profile-json "$preflight_bad" "${preflight_args[@]}" --prompt-file "$prompt")"
+        wait_status "$id" 'completed|failed|cancelled' 20 >/dev/null
+        sj="$(ad status "$id" --json)"
+        if [[ "$(jfield job.status <<<"$sj")" == failed && "$(jfield job.errorClass <<<"$sj")" == launch && "$(jfield job.note <<<"$sj")" == *"beforeLaunch verified $preflight_kind; rejected before harness launch"* && ! -e "$rec" ]]; then
+            pass "7 beforeLaunch fail-closed rejection prevents a $preflight_kind job from launching its harness"
+        else
+            fail "7 beforeLaunch fail-closed rejection prevents a $preflight_kind job from launching its harness"
+            echo "    $id: $(jfield job.status <<<"$sj")/$(jfield job.errorClass <<<"$sj") note=$(jfield job.note <<<"$sj")"
+        fi
+    done
+    rc=0
+    out="$(TEST_SECRET="$SECRET" ad probe --profile preflight --profile-json "$preflight_bad" 2>&1)" || rc=$?
+    if [[ "$rc" -eq 1 && "$out" == *"beforeLaunch verified probe; rejected before harness launch"* && "$out" != *"$SECRET"* ]]; then
+        pass "7 beforeLaunch runs on a probe too; its fail-closed refusal is redacted"
+    else
+        fail "7 beforeLaunch runs on a probe too; its fail-closed refusal is redacted"
+        echo "    exit=$rc out=${out//$SECRET/<SECRET>}"
     fi
 
     # --- 8. one write job per working tree; read-only jobs run beside it ---

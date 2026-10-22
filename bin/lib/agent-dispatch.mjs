@@ -909,12 +909,12 @@ async function cmdJobVerb(verb, args) {
 // The content of a work tree — tracked and untracked files; ignored files and .superpowers/ (the orchestrator's
 // workspace: prompts, reports, packages; files git tracks there too) left out — as one git tree id. A submodule or a
 // nested repository counts by its HEAD and by its own content (this id, recursively), so an edit inside it changes the
-// id as a moved HEAD does. It is written through a temporary copy of the index, so the real index, HEAD, refs and the
+// id as a moved HEAD does. It is written through a temporary index, so the real index, HEAD, refs and the
 // files stay as they are; git only gains loose objects, as with `git stash create`. The orchestrator takes it right
 // before and right after a job that must not edit files. A tree git cannot index (a nested repository without a
 // commit, an unreadable file) is an error carrying git's whole message, the paths it names included.
-function gitOut(cwd, argv, env = process.env, input = undefined) {
-  const r = spawnSync("git", argv, { cwd, env, input, encoding: "utf8", timeout: STORE_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 });
+function gitOut(cwd, argv, env = process.env, input = undefined, options = []) {
+  const r = spawnSync("git", [...options, ...argv], { cwd, env, input, encoding: "utf8", timeout: STORE_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 });
   if (r.error || r.status !== 0) {
     const said = String(r.error?.message || r.stderr || `exit ${r.status}`).split("\n").filter((line) => line.trim() && !line.startsWith("hint:"));
     throw new Error(`git ${argv[0]} failed: ${said.join("\n").trim()}`);
@@ -925,24 +925,40 @@ function gitOut(cwd, argv, env = process.env, input = undefined) {
 export function treeState(root) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "agent-dispatch-tree-"));
   try {
+    // core.ignorestat can reintroduce assume-unchanged even in a new index; fsmonitor can declare paths unchanged.
+    // Override both for these commands only, leaving the repository's config and the real index unchanged.
+    const git = (argv, env, input) => gitOut(root, argv, env, input, ["-c", "core.ignorestat=false", "-c", "core.fsmonitor=false"]);
     const index = path.join(tmp, "index");
-    const real = path.resolve(root, gitOut(root, ["rev-parse", "--git-path", "index"]).trim());
-    if (fs.existsSync(real)) {
-      // The copy keeps the index's mtime: git takes an entry whose file changed in the second the index was written
-      // as racy and rereads it, and a newer copy would trust its stat data and miss a same-size edit.
-      fs.copyFileSync(real, index);
-      const { atime, mtime } = fs.statSync(real);
-      fs.utimesSync(index, atime, mtime);
-    }
+    // Rebuild from the staged entries, not a byte copy: assume-unchanged, fsmonitor-valid and cached stat data can
+    // otherwise make git add trust an old blob despite changed bytes. ls-files expands a sparse index in memory;
+    // optional locks are disabled so that neither this nor a split-index refresh can rewrite the user's index.
+    const readEnv = { ...process.env, GIT_OPTIONAL_LOCKS: "0" };
+    const entries = git(["ls-files", "--stage", "-z"], readEnv);
+    const absentSparse = git(["ls-files", "-t", "-z"], readEnv).split("\0")
+      .filter((entry) => {
+        if (!entry.startsWith("S ")) return false;
+        try {
+          return !fs.lstatSync(path.join(root, entry.slice(2)), { throwIfNoEntry: false });
+        } catch (error) {
+          // A file replacing an ancestor directory is a real edit, not an unpopulated sparse path.
+          if (error.code === "ENOTDIR") return false;
+          throw error;
+        }
+      })
+      .map((entry) => `${entry.slice(2)}\0`).join("");
     const env = { ...process.env, GIT_INDEX_FILE: index };
+    git(["update-index", "-z", "--index-info"], env, entries);
+    // An absent skip-worktree path has no working bytes (a normal sparse checkout); retain its staged blob. Present
+    // paths, including dangling symlinks, keep no skip flag and are always read by git add below.
+    if (absentSparse) git(["update-index", "--skip-worktree", "-z", "--stdin"], env, absentSparse);
     // As bin/review-package: exclude .superpowers unless the repo already ignores it (git add then refuses the named
     // ignored path, and skips the directory anyway). A sparse checkout needs --sparse (git 2.34+), or git add refuses a
     // path outside its cone and keeps the old content of a file written back there.
     const ignored = spawnSync("git", ["check-ignore", "-q", "--no-index", ".superpowers"], { cwd: root }).status === 0;
     const sparse = spawnSync("git", ["config", "--bool", "core.sparseCheckout"], { cwd: root, encoding: "utf8" }).stdout?.trim() === "true";
-    gitOut(root, ["add", "-A", ...(sparse ? ["--sparse"] : []), "--", ".", ...(ignored ? [] : [":(exclude).superpowers"])], env);
+    git(["add", "-A", ...(sparse ? ["--sparse"] : []), "--", ".", ...(ignored ? [] : [":(exclude).superpowers"])], env);
     const workspace = [];
-    for (const entry of gitOut(root, ["ls-files", "-s", "-z"], env).split("\0")) {
+    for (const entry of git(["ls-files", "-s", "-z"], env).split("\0")) {
       const [, mode, name] = /^(\d+) [0-9a-f]+ \d\t(.+)$/s.exec(entry) ?? [];
       // What git already tracks under .superpowers/ leaves the temporary index too.
       if (name === ".superpowers" || name?.startsWith(".superpowers/")) workspace.push(name);
@@ -950,12 +966,12 @@ export function treeState(root) {
       // of its HEAD and its content instead. One that is not checked out has nothing to edit.
       else if (mode === "160000" && fs.existsSync(path.join(root, name, ".git"))) {
         const dir = path.join(root, name);
-        const id = gitOut(root, ["hash-object", "--stdin"], process.env, `${gitOut(dir, ["rev-parse", "HEAD"]).trim()} ${treeState(dir)}\n`).trim();
-        gitOut(root, ["update-index", "--cacheinfo", `160000,${id},${name}`], env);
+        const id = git(["hash-object", "--stdin"], process.env, `${gitOut(dir, ["rev-parse", "HEAD"]).trim()} ${treeState(dir)}\n`).trim();
+        git(["update-index", "--cacheinfo", `160000,${id},${name}`], env);
       }
     }
-    if (workspace.length > 0) gitOut(root, ["update-index", "--force-remove", "-z", "--stdin"], env, workspace.map((name) => `${name}\0`).join(""));
-    return gitOut(root, ["write-tree"], env).trim();
+    if (workspace.length > 0) git(["update-index", "--force-remove", "-z", "--stdin"], env, workspace.map((name) => `${name}\0`).join(""));
+    return git(["write-tree"], env).trim();
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

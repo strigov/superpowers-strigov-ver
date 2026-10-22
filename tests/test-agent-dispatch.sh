@@ -1775,8 +1775,8 @@ EOF
         && "$RC" -eq 2 && -z "$OUT" && "$ERR" == "$t_out" ]]
     verdict "16 a commit id or an unknown id as --since: exit 2, the same usage error (not a change with no path)" $? "commit: rc=$ok $t_out" "unknown: rc=$RC out: $OUT err: $ERR"
 
-    # A same-size edit in the second the index was written (git: a racily clean entry) counts: the temporary copy keeps
-    # the index mtime. Made deterministic by giving the file, its index entry and the index one old mtime.
+    # A same-size edit in the second the index was written (git: a racily clean entry) counts. Made deterministic by
+    # giving the file, its index entry and the index one old mtime.
     local t_dir="$TEST_ROOT/racy" t_r
     git init -q -b main "$t_dir"
     git -C "$t_dir" config core.trustctime false
@@ -1792,6 +1792,65 @@ EOF
     run_ad tree-state --cwd "$t_dir" --since "$t_r"
     [[ "$RC" -eq 0 && "$OUT" == "tree "*": changed since ${t_r:0:7}: f.txt" ]]
     verdict "16 a same-size edit of a racily clean file (its mtime equals the index mtime) is named" $? "rc=$RC out: $OUT err: $ERR"
+
+    # Git's speed hints must not hide the bytes of an available tracked path. Keep an unrelated partial staging,
+    # an absent skip-worktree path (the same representation as a sparse checkout), and a non-racy cached stat whose
+    # size/mtime still match after an edit. The newline path tests the NUL-delimited index plumbing.
+    t_dir="$TEST_ROOT/index-flags"
+    local t_assumed=$'assumed\nfile.txt' t_fbase t_fidx t_fhead t_fstage t_fflags t_fafter
+    git init -q -b main "$t_dir"
+    git -C "$t_dir" config core.trustctime false
+    printf 'one\n' >"$t_dir/$t_assumed"
+    printf 'delete\n' >"$t_dir/deleted.txt"
+    printf 'skip\n' >"$t_dir/skip.txt"
+    printf 'absent\n' >"$t_dir/absent.txt"
+    printf 'aaaa\n' >"$t_dir/cached.txt"
+    printf 'base\n' >"$t_dir/staged.txt"
+    mkdir -p "$t_dir/parent"
+    printf 'child\n' >"$t_dir/parent/child.txt"
+    git -C "$t_dir" add . && git -C "$t_dir" "${git_id[@]}" commit -qm f0
+    touch -t 202001010000.00 "$t_dir/cached.txt"
+    git -C "$t_dir" update-index -q --refresh
+    printf 'staged\n' >"$t_dir/staged.txt"
+    git -C "$t_dir" add staged.txt
+    printf 'unstaged\n' >>"$t_dir/staged.txt"
+    git -C "$t_dir" update-index --assume-unchanged -- "$t_assumed" deleted.txt
+    git -C "$t_dir" update-index --skip-worktree -- skip.txt absent.txt parent/child.txt
+    # This option would make Git mark even newly imported temporary-index entries as assume-unchanged.
+    git -C "$t_dir" config core.ignorestat true
+    rm -f "$t_dir/absent.txt"
+    t_fstage="$(git -C "$t_dir" ls-files --stage)" t_fflags="$(git -C "$t_dir" ls-files -v)"
+    t_fhead="$(git -C "$t_dir" rev-parse HEAD)" t_fidx="$(cksum <"$t_dir/.git/index")"
+    run_ad tree-state --cwd "$t_dir"
+    t_fbase="${OUT#tree }"
+    printf 'two\n' >"$t_dir/$t_assumed"
+    printf 'bbbb\n' >"$t_dir/cached.txt"
+    touch -t 202001010000.00 "$t_dir/cached.txt"
+    rm -f "$t_dir/deleted.txt" "$t_dir/skip.txt"
+    ln -s missing-target "$t_dir/skip.txt"
+    run_ad tree-state --cwd "$t_dir" --since "$t_fbase"
+    t_fafter="$OUT"
+    [[ "$RC" -eq 0 && "$OUT" == "tree "*": changed since ${t_fbase:0:7}: "'"assumed\nfile.txt", cached.txt, deleted.txt, skip.txt' ]]
+    verdict "16 assume-unchanged edits/deletions, unchanged cached stat, core.ignorestat, and a present skip-worktree dangling symlink are named" $? "rc=$RC out: $OUT err: $ERR"
+    [[ "$(cksum <"$t_dir/.git/index")" == "$t_fidx" && "$(git -C "$t_dir" rev-parse HEAD)" == "$t_fhead" \
+        && "$(git -C "$t_dir" ls-files --stage)" == "$t_fstage" && "$(git -C "$t_dir" ls-files -v)" == "$t_fflags" \
+        && "$(git -C "$t_dir" config --bool core.ignorestat)" == true \
+        && "$(cat "$t_dir/staged.txt")" == $'staged\nunstaged' && ! -e "$t_dir/absent.txt" ]]
+    verdict "16 snapshots leave the real index bytes, flags, partial staging, HEAD and absent skip-worktree paths untouched" $? "index: $t_fidx -> $(cksum <"$t_dir/.git/index")"
+    printf 'one\n' >"$t_dir/$t_assumed"
+    printf 'aaaa\n' >"$t_dir/cached.txt"
+    printf 'delete\n' >"$t_dir/deleted.txt"
+    rm -f "$t_dir/skip.txt"
+    printf 'skip\n' >"$t_dir/skip.txt"
+    run_ad tree-state --cwd "$t_dir" --since "$t_fbase"
+    [[ "$RC" -eq 0 && "$OUT" == "tree $t_fbase: unchanged" && "$(cksum <"$t_dir/.git/index")" == "$t_fidx" ]]
+    verdict "16 reverting flagged files restores the snapshot while an absent skip-worktree path keeps its staged blob" $? "rc=$RC out: $OUT err: $ERR" "edited: $t_fafter"
+    rm -rf "$t_dir/parent"
+    printf 'replacement\n' >"$t_dir/parent"
+    run_ad tree-state --cwd "$t_dir" --since "$t_fbase"
+    [[ "$RC" -eq 0 && "$OUT" == "tree "*": changed since ${t_fbase:0:7}: parent, parent/child.txt" \
+        && "$(cksum <"$t_dir/.git/index")" == "$t_fidx" && "$(cat "$t_dir/parent")" == replacement ]]
+    verdict "16 a file replacing the parent of a skip-worktree path is named without changing the real index" $? "rc=$RC out: $OUT err: $ERR"
 
     # A submodule (ignore = all in .gitmodules) and an untracked nested repository count by HEAD and content.
     t_dir="$TEST_ROOT/nested"
@@ -1876,16 +1935,20 @@ EOF
     [[ "$RC" -eq 1 && -z "$OUT" && "$ERR" == "agent-dispatch: git add failed: "*"fixtures/r"* ]]
     verdict "16 a nested repository without a commit: exit 1, and the message names it" $? "rc=$RC out: $OUT err: $ERR"
 
-    # A sparse checkout (git add --sparse, git 2.34+): a new file or a file written back outside the cone is named.
+    # Full and sparse indexes (git add --sparse, git 2.34+): absent paths outside the cone retain their staged blobs,
+    # but available files are read. Expanding a sparse directory in the temporary index must not expand the real one.
     if [[ "$(git add -h 2>&1)" == *sparse* ]]; then # --sparse, or --[no-]sparse in newer usage text
-        t_dir="$TEST_ROOT/sparse"
-        local t_s t_sp=()
+      local t_sparse_index t_sparse_idx t_sparse_head t_s t_sp
+      for t_sparse_index in --no-sparse-index --sparse-index; do
+        t_dir="$TEST_ROOT/sparse$t_sparse_index"
+        t_sp=()
         git init -q -b main "$t_dir"
         mkdir -p "$t_dir/in" "$t_dir/out"
         printf 'i\n' >"$t_dir/in/i.txt"
         printf 'o\n' >"$t_dir/out/o.txt"
         git -C "$t_dir" add in out && git -C "$t_dir" "${git_id[@]}" commit -qm p0
-        git -C "$t_dir" sparse-checkout set --cone in
+        git -C "$t_dir" sparse-checkout set --cone "$t_sparse_index" in
+        t_sparse_idx="$(cksum <"$t_dir/.git/index")" t_sparse_head="$(git -C "$t_dir" rev-parse HEAD)"
         run_ad tree-state --cwd "$t_dir"
         t_s="${OUT#tree }"
         t_sp+=("$RC:$OUT")
@@ -1901,8 +1964,10 @@ EOF
         run_ad tree-state --cwd "$t_dir" --since "$t_s"
         t_sp+=("$RC:$OUT")
         [[ "${t_sp[0]}" == "0:tree $(git -C "$t_dir" rev-parse 'HEAD^{tree}')" && "${t_sp[1]}" == "0:tree "*": changed since ${t_s:0:7}: out/new.txt" \
-            && "${t_sp[2]}" == "0:tree "*": changed since ${t_s:0:7}: out/o.txt" && "${t_sp[3]}" == "0:tree $t_s: unchanged" ]]
-        verdict "16 a sparse checkout: clean is HEAD^{tree}; a new file or a file written back outside the cone is named" $? "${t_sp[@]}"
+            && "${t_sp[2]}" == "0:tree "*": changed since ${t_s:0:7}: out/o.txt" && "${t_sp[3]}" == "0:tree $t_s: unchanged" \
+            && "$(cksum <"$t_dir/.git/index")" == "$t_sparse_idx" && "$(git -C "$t_dir" rev-parse HEAD)" == "$t_sparse_head" ]]
+        verdict "16 a sparse checkout ($t_sparse_index): absent paths retained, outside-cone edits named, real index and HEAD untouched" $? "${t_sp[@]}"
+      done
     else
         echo "  [SKIP] git add has no --sparse (git older than 2.34): the sparse checkout test"
     fi

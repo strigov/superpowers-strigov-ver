@@ -96,6 +96,22 @@ const plain = {
     };
   },
   reduce,
+  // The effective-config hook runs after generated files exist; default subprocesses omit the key, exact-env
+  // opt-in exposes it only to the same trusted harness binary for credential-dependent config evaluation.
+  // checkBeforeLaunch="reject" proves the hook executes on fresh jobs, resumes and probes before a model run.
+  beforeLaunch(req, ctx) {
+    if (!req.profile.checkBeforeLaunch) return;
+    if (!ctx.fs.readFile(path.join(req.job.dir, "plain.cfg"))?.startsWith("model=")) throw new Error("beforeLaunch ran before materialize");
+    const show = (name) => ctx.execHarness(["--print-env", name], { env: { PLAIN_API_KEY: "must-not-override" }, cwd: "/" }).stdout.trim();
+    if ("PLAIN_API_KEY" in ctx.env || show("PLAIN_API_KEY") !== "" || show("PLAIN_SAFE") !== "1") throw new Error("beforeLaunch received an unsafe environment");
+    if (req.profile.auth?.keyEnv && (req.profile.auth.keyEnv in ctx.env || show(req.profile.auth.keyEnv) !== "")) throw new Error("beforeLaunch received the source key");
+    const keyed = req.profile.auth !== null && typeof req.profile.auth === "object";
+    const exactKey = ctx.execHarness(["--print-env", "PLAIN_API_KEY"], { includeSecrets: true }).stdout.trim();
+    if (keyed && exactKey === "") throw new Error("beforeLaunch exact-env opt-in lost the key");
+    if (req.profile.checkBeforeLaunchAlias && ctx.execHarness(["--print-env", req.profile.auth.keyEnv], { includeSecrets: true }).stdout.trim() !== exactKey) throw new Error("beforeLaunch exact-env opt-in lost the source alias");
+    if (req.profile.wrap?.includes("WRAPPED=yes") && show("WRAPPED") !== "yes") throw new Error("beforeLaunch bypassed the wrap");
+    if (req.profile.checkBeforeLaunch === "reject") throw new Error(`beforeLaunch verified ${req.job.id === null ? "probe" : req.resume ? "resume" : "fresh"}; rejected before harness launch`);
+  },
   // With profile.checkFinalize: a second harness process, as opencode export would run it, reports what it saw.
   finalize(job, ctx) {
     if (!ctx.profile.checkFinalize) return null;

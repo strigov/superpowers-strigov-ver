@@ -191,7 +191,9 @@ Every preset targets `claude`, `dsh`, OpenCode or pi, and 0.12.0 ships all four 
   - Linux: `["secret-tool", "lookup", "service", "deepseek"]`
   - any OS: `["op", "read", "op://…"]`
 
-A key reaches only the harness process's environment, never its argv, a settings file or the chat. The pipeline never runs `key set` and never asks you for a key.
+The dispatcher supplies a key through the harness process's environment; it does not put it in argv, settings files or prompts. The pipeline never runs `key set` and never asks you for a key.
+
+The dispatcher passes the resolved key to its background runner through an anonymous pipe, which the runner closes before starting the harness. It creates no key handoff file in the job directory. This does not change the optional `keys/<name>` store or the harness-specific exposure described below: OpenCode's and pi's Bash can still read their harness key.
 
 Profiles that share a key, a harness login (an OpenCode or pi login counts per provider) or a `shares` label drop out together on `auth` or `quota`. The built-in `glm` carries `zai-coding-plan`, so a Z.ai API fallback with that label is not tried against the same exhausted quota.
 
@@ -273,7 +275,7 @@ A `models.json` for an endpoint of your own, with the profile's `"keyVar": "MY_K
 | Model, effort | `deepseek-v4-pro` (the preset) or `deepseek-flash` (dsh's own default); effort `off`, `low`, `high` (default) or `max` |
 | Endpoint | `endpoint` is dsh's `baseURL` (default `https://api.deepseek.com/anthropic`), e.g. your own gateway; a repository `.env` cannot change it |
 | Options | `options.sessionLog: true` turns dsh's session-log upload back on (off by default). `options.agentsHome: "user"` lets dsh read the shared `~/.agents`. `options.patch` adds rows to dsh's patch file; the key variable, `baseURL` and the permission rows stay the adapter's |
-| Reviewer | dsh's `read-only` mode, an OS sandbox: it reads and runs commands, and every write is denied. A writer runs in `danger-full-access` |
+| Reviewer | Requests dsh's `read-only` OS sandbox. Before each reviewer or native-writer launch, including resume and probe, the adapter requires an offline `--dump-config` to confirm resolved sandbox and approval policies; incompatible or unverified policies prevent launch. This checks configuration, not the OS sandbox's implementation. A writer without `native` runs in `danger-full-access` |
 | Who sees the key | dsh strips `*KEY*` and `*TOKEN*` variables from its tools |
 
 ### ZCode and Codex
@@ -383,7 +385,9 @@ More about routing:
 }
 ```
 
-`allowRead` and `allowWrite` open only two places in the plugin's data directory: `state/` (pi writes its session files to `state/<workspace>/jobs/<id>/sessions`) and this profile's home `homes/<profile>/`; `denyRead` closes the rest of `~/.claude`. Never open the whole data directory: `keys/` holds every stored key, the other profiles' homes hold their logins, and a job that can write `config.json` can drop its own `wrap` or add a `keyCmd` that runs outside the sandbox. `agent-dispatch` reads the key outside the sandbox, always as `config.json` names it. A resumed job runs on the profile as `config.json` has it now (its `env`, `bin`, `wrap` and `sandbox`), never on the copy in the job's record, and `--resume-task` refuses (`dispatch --fresh`) a record whose harness, model, endpoint, home, `bin`, `wrap`, `sandbox`, `auth`, `keyVar` or `authHeader` differ from `config.json`. So a job that rewrites its own record can neither take the sandbox off the next run of its session nor slip its own environment (`NODE_OPTIONS`, `PATH`) into it. Narrow gaps stay: `state/` also holds the other jobs' records and, for the moment between a job's dispatch and its start, its key handoff file, so a hostile job running at the same time could read that key or rewrite a record about to start. Treat `srt` here as containment for a careless model, not as a boundary against a hostile one.
+`allowRead` and `allowWrite` open only two places in the plugin's data directory: `state/` (pi writes its session files to `state/<workspace>/jobs/<id>/sessions`) and this profile's home `homes/<profile>/`; `denyRead` closes the rest of `~/.claude`. Never open the whole data directory: `keys/` holds every stored key, the other profiles' homes hold their logins, and a job that can write `config.json` can drop its own `wrap` or add a `keyCmd` that runs outside the sandbox. `agent-dispatch` reads the key outside the sandbox, always as `config.json` names it. A resumed job runs on the profile as `config.json` has it now (its `env`, `bin`, `wrap` and `sandbox`), never on the copy in the job's record, and `--resume-task` refuses (`dispatch --fresh`) a record whose harness, model, endpoint, home, `bin`, `wrap`, `sandbox`, `auth`, `keyVar` or `authHeader` differ from `config.json`. So a job that rewrites its own record can neither take the sandbox off the next run of its session nor slip its own environment (`NODE_OPTIONS`, `PATH`) into it. A gap remains: `state/` also holds the other jobs' records, so a hostile job with write access there could rewrite a record about to start. Key handoff no longer creates a file in that shared directory. Treat `srt` here as containment for a careless model, not as a boundary against a hostile one.
+
+The before/after no-edit check uses Git snapshots and rereads present tracked paths despite `assume-unchanged` or `skip-worktree`, without changing the real Git index. Git filters and normalization still apply. It does not certify the staging index, refs, Git configuration, ignored files, `.superpowers/` or paths outside the tree. Use filesystem and network isolation to enforce access boundaries.
 
 - macOS cannot nest one Seatbelt sandbox in another. Under `srt`, `claude` runs only with `"sandbox": "off"`, and `dsh` only as a writer without `native` (`danger-full-access`: its reviewer mode is a sandbox too).
 - `srt` exits 0 when the harness dies of SIGINT or SIGTERM. A job's outcome comes from its own record, never from that exit code.

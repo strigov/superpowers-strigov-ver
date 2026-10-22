@@ -16,6 +16,8 @@
 //   rows that carry the permission mode (A4) or switch off the project instructions (A6).
 // - Permissions (spec §3.6 A4): writer DSH_PERMISSION_MODE=danger-full-access, with "sandbox": "native"
 //   workspace-write; a reviewer always read-only (headless has no approval answerer: an ask is a denial [04b §7]).
+//   beforeLaunch verifies the effective offline dump before every bounded run, including resumes and probes: a home
+//   patch can override the bundle's environment-driven rows. A failed or ambiguous check never starts a model turn.
 // - Key: auth key / keyEnv / keyCmd → DEEPSEEK_API_KEY in the environment only. auth "native" sets nothing: dsh reads
 //   the inherited env, then <cwd>/.env, then $DSH_HOME/.env [04b §6].
 // - Home: "user" (the default) is $DSH_HOME or ~/.dsh, the caller's DSH_HOME passes through; "isolated" is
@@ -372,16 +374,21 @@ export function permissionRows(dump) {
 // when a mode literal sits anywhere else — a presets row, another key: the real dump format is unverified, so such a
 // row is neither proof nor breach — or when the dump shows none of them. The home layers are only stat'ed, never
 // read: the hint names those that exist.
-function permissionCheck(dump, writer, dshHome, ctx) {
+function permissionCheck(dump, writer, dshHome, ctx, requested = "read-only") {
   const rows = permissionRows(dump);
   const found = rows.filter((row) => !row.unverified);
   const unverified = rows.filter((row) => row.unverified);
   const shown = (list) => [...new Set(list.map(({ id, value }) => (value === "DSH_PERMISSION_MODE" ? `${id} follows DSH_PERMISSION_MODE` : `${id} ${value}`)))].join(", ");
-  const wider = found.filter(({ value }) => value !== "read-only" && value !== "DSH_PERMISSION_MODE");
+  const allowed = new Set(["read-only", "DSH_PERMISSION_MODE", ...(requested === "workspace-write" ? ["workspace-write"] : [])]);
+  const wider = found.filter(({ value }) => !allowed.has(value));
   if (wider.length > 0) {
     const layers = HOME_LAYERS.map((parts) => path.join(dshHome, ...parts)).filter((file) => ctx.fs.stat(file)?.isFile?.());
     const modes = [...new Set(wider.map(({ value }) => value).filter((value) => value !== "never"))];
     const effect = modes.length > 0 ? `reviewer jobs run ${modes.join(" / ")}` : "the rows no longer follow it (approval never is the danger-full-access preset's)";
+    if (requested !== "read-only") return {
+      level: "FAIL",
+      hint: `requested ${requested}, but --dump-config shows ${shown(wider)}; a home layer overrides DSH_PERMISSION_MODE`,
+    };
     return {
       level: "FAIL",
       hint: `writer ${writer}, reviewer ${modes.length > 0 ? "NOT read-only" : "read-only overridden"}: --dump-config with DSH_PERMISSION_MODE=read-only shows ${shown(wider)} — a row of $DSH_HOME/cordis.patch.yml (or profiles/headless/cordis.patch.yml) overrides DSH_PERMISSION_MODE: ${effect}; ${layers.length > 0 ? `check ${layers.join(", ")} (not read here)` : `no such file in ${dshHome}: check the bundle's rows`}`,
@@ -398,6 +405,63 @@ function permissionCheck(dump, writer, dshHome, ctx) {
     return { level: "ok", hint: `writer ${writer}, reviewer read-only: --dump-config with DSH_PERMISSION_MODE=read-only shows ${shown(found)} (headless has no approval answerer, so an escalation is denied)` };
   }
   return { level: "WARN", hint: `writer ${writer}, reviewer read-only (DSH_PERMISSION_MODE) not verified: --dump-config shows no sandbox / approval / permission row with a mode; check the dump by hand` };
+}
+
+// Runtime needs proof, unlike doctor's diagnostic WARNs. Accept only resolved mode/policy scalars in the effective
+// dump, not expressions merely mentioning DSH_PERMISSION_MODE (which could resolve to anything). The dump format is
+// not a stable API: unknown values, missing rows, duplicates and disabled policies fail closed. This deliberately
+// does not parse or evaluate arbitrary YAML from a home patch; dsh has already resolved those layers for the dump.
+function resolvedPermissions(dump, requested) {
+  const ids = [...String(dump ?? "").matchAll(/^\s*-\s+id:\s*["']?([A-Za-z0-9._:/-]+)["']?\s*$/gm)]
+    .map((match) => match[1]).filter((id) => GRADED_ROW_RE.test(id));
+  if (ids.length !== new Set(ids).size) return "duplicate sandbox / approval rows";
+  let modes = 0;
+  let policies = 0;
+  for (const id of ids) {
+    const section = dumpSection(dump, id) ?? "";
+    if (/\bdisabled["']?\s*:\s*true\b|\benabled["']?\s*:\s*false\b/.test(section)) return `${id} is disabled`;
+    const entries = [...section.matchAll(/(?:^|\n|[,{])\s*["']?(mode|policy)["']?\s*:\s*([^\n,}]*)/g)];
+    const key = /sandbox/.test(id) ? "mode" : "policy";
+    const values = entries.filter((entry) => entry[1] === key);
+    if (values.length !== 1) return `${id} has no unambiguous resolved ${key}`;
+    const raw = values[0][2].trim();
+    const value = /^(?:"([a-z-]+)"|'([a-z-]+)'|([a-z-]+))$/.exec(raw);
+    const scalar = value?.[1] ?? value?.[2] ?? value?.[3];
+    if (key === "mode") {
+      modes += 1;
+      if (scalar !== "read-only" && !(requested === "workspace-write" && scalar === "workspace-write")) {
+        return `${id} does not resolve to ${requested} or a stricter mode`;
+      }
+    } else {
+      policies += 1;
+      if (scalar !== "ask") return `${id} does not resolve to approval ask`;
+    }
+  }
+  return modes === 0 || policies === 0 ? "missing resolved sandbox / approval rows" : null;
+}
+
+// Materialized patch and exact job cwd/home/wrap/environment: the core supplies execHarness after writing adapter
+// files and before spawning the harness. The trusted binary must see its key too: Cordis expressions can depend on
+// its presence or value, so a scrubbed environment could approve another policy. The offline dump is never logged.
+// No model request is made by --dump-config. Unrestricted writers need no fence;
+// bounded writers and reviewers must not inherit a wider policy from $DSH_HOME (also rechecked on resume).
+export function beforeLaunch(req, ctx) {
+  const profile = req.profile ?? {};
+  const requested = permissionMode(profile, req.write === true);
+  if (requested === "danger-full-access") return;
+  if (typeof ctx.execHarness !== "function") throw launchError("cannot verify dsh permissions: no launch-time command runner");
+  const patch = path.join(req.job.dir, PATCH_FILE);
+  const dump = ctx.execHarness(["--profile", "headless", "--patch", patch, "--dump-config"], { timeoutMs: 60_000, includeSecrets: true });
+  if (dump.error || dump.status !== 0 || dump.signal || dump.timedOut || dump.stopped) {
+    const why = dump.error?.code ?? (dump.signal ? `signal ${dump.signal}` : dump.timedOut ? "timeout" : dump.stopped ? "stopped" : `exit ${dump.status}`);
+    // Do not quote dump diagnostics: native auth/config can contain credentials that the core does not know.
+    throw launchError(`cannot verify dsh ${requested} permissions: --dump-config failed (${why}); harness not started`);
+  }
+  const checked = permissionCheck(dump.stdout, permissionMode(profile, true), dshHomeOf(profile, ctx), ctx, requested);
+  const unresolved = resolvedPermissions(dump.stdout, requested);
+  if (checked.level !== "ok" || unresolved) {
+    throw launchError(`cannot verify dsh ${requested} permissions: ${unresolved ?? checked.hint}; harness not started`);
+  }
 }
 
 // doctor (spec §4.3, §5.4; [04b §16 doctor row]): the effort vocabulary of the patch rows, Node, the native key file
@@ -603,6 +667,7 @@ const dsh = {
 
   prepareHome,
   invocation,
+  beforeLaunch,
 
   // doctor --probe: one read-only PONG turn on the profile as configured, without the web tools.
   probe(req, ctx) {
