@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version 0.12.0" src="https://img.shields.io/badge/version-0.12.0-7c8cff?style=flat-square">
+  <img alt="Version 0.13.0" src="https://img.shields.io/badge/version-0.13.0-7c8cff?style=flat-square">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude_Code-plugin-d97757?style=flat-square">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-35d6a6?style=flat-square">
 </p>
@@ -145,6 +145,19 @@ This table is the built-in scheme: with no `config.json` it is exactly what runs
 `agent-dispatch` ships the routing layer (profiles, keys, `route`, `doctor`, job status, the pass-through to ZCode and Codex) and adapters for `claude -p`, DeepSeek Harness (`dsh`), OpenCode and pi. Any role can run on any profile, the in-session roles included.
 
 `agent-dispatch` lives in the plugin's `bin/`. In your own terminal, call it by its absolute path; Claude can print it for you.
+
+### Windows
+
+`agent-dispatch` runs natively on Windows 10 and 11, without WSL. Checked on Windows 11 with Claude Code 2.1.310 and Node 22: `doctor`, `doctor --probe`, and a background `claude -p` task with tool calls. Windows has no process groups and no signals. On first use the job core therefore compiles a small helper, `bin/lib/win/agent-proc.cs`, into the data directory's `cache/`, using the `csc.exe` of .NET Framework 4 that ships with Windows. Each harness runs inside a Job Object of its own. A cancel, a timeout or the end of the job ends the whole process tree, including background processes the model started, and a runner that dies takes its tree with it. `doctor` reports the helper in its `platform` row.
+
+What differs from macOS and Linux:
+
+- A stop is always immediate (`TerminateProcess`). The polite first step of a cancel ladder does not exist, so `claude -p` cannot save its session on a cancel; a cancelled job is never resumed anyway.
+- The harness must be an `.exe`. The native Claude Code installer provides `claude.exe`. An npm `.cmd` shim (`opencode.cmd`, `pi.cmd`) cannot start without a shell, so point the profile's `bin` at the real executable. Only the `claude` adapter has been checked on Windows so far.
+- `"sandbox": "native"` is not available (`doctor` FAIL).
+- File modes do not apply. The data directory under `%USERPROFILE%\.claude` is private through the user profile's ACL.
+- The Codex pass-through runs `codex-dispatch` under Git Bash. ZCode (`glm`) does not support Windows yet.
+- Store keys from PowerShell or cmd: `node <plugin>\bin\lib\agent-dispatch.mjs key set <name>`, then paste the key at the hidden prompt. Git Bash's terminal is not a console for Node, so it cannot hide what you type.
 
 ### A profile in three steps
 
@@ -480,6 +493,7 @@ The upstream `subagent-driven-development` skill is replaced by `dev-orchestrato
 │   ├── lib/agent-core.mjs           # Shared job core for agent-dispatch
 │   ├── lib/agent-dispatch.mjs       # agent-dispatch CLI, config, routes
 │   ├── lib/agents-defaults.json     # Built-in profiles, roles, presets
+│   ├── lib/win/agent-proc.cs        # Windows process helper (Job Objects)
 │   └── lib/adapters/                # Harness adapters
 ├── skills/
 │   ├── dev-orchestrator/            # Protocol and role prompt templates
@@ -492,6 +506,7 @@ The upstream `subagent-driven-development` skill is replaced by `dev-orchestrato
 ├── tests/test-pipeline-context.sh   # SessionStart hook + manual-only skill checks
 ├── tests/test-zcode-dispatch.sh     # ZCode wrapper tests (stubbed CLI)
 ├── tests/test-agent-core.sh         # Job core tests (trivial adapter)
+├── tests/test-agent-core-windows.sh # Job core on Windows (Git Bash)
 ├── tests/test-agent-dispatch.sh     # agent-dispatch tests (stubbed wrappers)
 ├── tests/test-adapter-*.sh          # Harness adapter tests (stubbed harnesses)
 ├── tests/test-orchestrator-defaults.sh  # Built-in roles, commands and caps unchanged
@@ -518,6 +533,7 @@ bash tests/test-sdd-scripts.sh
 bash tests/test-pipeline-context.sh
 bash tests/test-zcode-dispatch.sh
 bash tests/test-agent-core.sh
+bash tests/test-agent-core-windows.sh  # on Windows, under Git Bash; skips elsewhere
 bash tests/test-agent-dispatch.sh
 for t in claude opencode pi dsh; do bash tests/test-adapter-$t.sh; done
 bash tests/test-orchestrator-defaults.sh

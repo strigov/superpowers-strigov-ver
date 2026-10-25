@@ -114,7 +114,7 @@ Exit codes everywhere, as in `zcode-dispatch`: **0** success · **1** runtime fa
 | `route ROLE [--skip …] [--json]` · `route --all [--json]` | Step 2. |
 | `channels` | Every profile: harness, model, the key or login it pays with, and the profiles that share it. Bookkeeping read. |
 | `doctor [--profile P] [--probe]` | Offline checks without a model call; `--probe` adds one paid "PONG" request — the user runs it. |
-| `key set NAME` · `key list` · `key rm NAME` | The user's keys. `key set` reads a hidden prompt or a pipe in the user's own terminal (`! pbpaste \| "$AD" key set <name>`; Linux `wl-paste` or `xclip -o -selection clipboard`). Never run by the orchestrator. |
+| `key set NAME` · `key list` · `key rm NAME` | The user's keys. `key set` reads a hidden prompt or a pipe in the user's own terminal (`! pbpaste \| "$AD" key set <name>`; Linux `wl-paste` or `xclip -o -selection clipboard`; Windows: the hidden prompt of `node <plugin>\bin\lib\agent-dispatch.mjs key set <name>` in PowerShell or cmd, since Git Bash's terminal cannot hide input). Never run by the orchestrator. |
 | `profile list` · `profile show P` · `profile add NAME --from PRESET …` · `profile env P [-- COMMAND]` · `preset list` | Profile management — user actions; `list` / `show` are reads. |
 
 ## Failure handling

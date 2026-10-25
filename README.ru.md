@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img alt="Версия 0.12.0" src="https://img.shields.io/badge/version-0.12.0-7c8cff?style=flat-square">
+  <img alt="Версия 0.13.0" src="https://img.shields.io/badge/version-0.13.0-7c8cff?style=flat-square">
   <img alt="Плагин Claude Code" src="https://img.shields.io/badge/Claude_Code-plugin-d97757?style=flat-square">
   <img alt="Лицензия MIT" src="https://img.shields.io/badge/license-MIT-35d6a6?style=flat-square">
 </p>
@@ -145,6 +145,19 @@ Companion runtime уже вендорится. Отдельный Claude Code-п
 `agent-dispatch` — это слой маршрутизации (профили, ключи, `route`, `doctor`, статус задач, сквозной вызов ZCode и Codex) и адаптеры для `claude -p`, DeepSeek Harness (`dsh`), OpenCode и pi. Любую роль можно запустить на любом профиле, в том числе роли, которые по умолчанию исполняются в сессии.
 
 `agent-dispatch` лежит в каталоге `bin/` плагина. В своём терминале вызывайте его по абсолютному пути — Claude подскажет его.
+
+### Windows
+
+`agent-dispatch` работает на Windows 10 и 11 нативно, без WSL. Проверено на Windows 11 с Claude Code 2.1.310 и Node 22: `doctor`, `doctor --probe` и фоновая задача `claude -p` с вызовами инструментов. В Windows нет групп процессов и сигналов. Поэтому при первом запуске ядро задач компилирует небольшой хелпер `bin/lib/win/agent-proc.cs` в `cache/` каталога данных — штатным `csc.exe` из .NET Framework 4, который входит в Windows. Каждый харнесс работает в собственном Job Object. Отмена, таймаут или конец задачи завершают всё дерево процессов, включая фоновые процессы, запущенные моделью. Если runner погибает, он забирает дерево с собой. `doctor` показывает хелпер в строке `platform`.
+
+Отличия от macOS и Linux:
+
+- Остановка всегда мгновенная (`TerminateProcess`). Вежливого первого шага лестницы отмены нет, поэтому `claude -p` не успевает сохранить сессию при отмене; отменённую задачу и так никогда не продолжают.
+- Харнесс должен быть `.exe`. Нативный установщик Claude Code даёт `claude.exe`. npm-обёртку `.cmd` (`opencode.cmd`, `pi.cmd`) без оболочки не запустить, поэтому укажите в `bin` профиля настоящий исполняемый файл. Пока на Windows проверен только адаптер `claude`.
+- `"sandbox": "native"` недоступен (`doctor` — FAIL).
+- Права файлов не применяются. Каталог данных в `%USERPROFILE%\.claude` закрыт ACL профиля пользователя.
+- Сквозной вызов Codex запускает `codex-dispatch` через Git Bash. ZCode (`glm`) на Windows пока не поддерживается.
+- Ключи сохраняйте из PowerShell или cmd: `node <плагин>\bin\lib\agent-dispatch.mjs key set <имя>`, затем вставьте ключ в скрытое приглашение. Терминал Git Bash для Node не консоль, поэтому скрыть ввод там нельзя.
 
 ### Профиль за три шага
 
@@ -480,6 +493,7 @@ Upstream-скилл `subagent-driven-development` заменён на `dev-orche
 │   ├── lib/agent-core.mjs           # Общее ядро задач agent-dispatch
 │   ├── lib/agent-dispatch.mjs       # CLI agent-dispatch, конфигурация, маршруты
 │   ├── lib/agents-defaults.json     # Встроенные профили, роли, пресеты
+│   ├── lib/win/agent-proc.cs        # Хелпер процессов для Windows (Job Objects)
 │   └── lib/adapters/                # Адаптеры харнессов
 ├── skills/
 │   ├── dev-orchestrator/            # Протокол и шаблоны промптов ролей
@@ -492,6 +506,7 @@ Upstream-скилл `subagent-driven-development` заменён на `dev-orche
 ├── tests/test-pipeline-context.sh   # SessionStart-хук и проверки manual-only скиллов
 ├── tests/test-zcode-dispatch.sh     # Тесты обёртки ZCode (CLI-заглушка)
 ├── tests/test-agent-core.sh         # Тесты ядра задач (тривиальный адаптер)
+├── tests/test-agent-core-windows.sh # Ядро задач на Windows (Git Bash)
 ├── tests/test-agent-dispatch.sh     # Тесты agent-dispatch (заглушки обёрток)
 ├── tests/test-adapter-*.sh          # Тесты адаптеров харнессов (заглушки харнессов)
 ├── tests/test-orchestrator-defaults.sh  # Встроенные роли, команды и лимиты не изменились
@@ -518,6 +533,7 @@ bash tests/test-sdd-scripts.sh
 bash tests/test-pipeline-context.sh
 bash tests/test-zcode-dispatch.sh
 bash tests/test-agent-core.sh
+bash tests/test-agent-core-windows.sh  # на Windows, под Git Bash; на других ОС пропускается
 bash tests/test-agent-dispatch.sh
 for t in claude opencode pi dsh; do bash tests/test-adapter-$t.sh; done
 bash tests/test-orchestrator-defaults.sh
