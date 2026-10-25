@@ -93,6 +93,11 @@
 //   recorded in the job's ownership log before it starts (boundedExec). discover's ctx.exec runs through the profile's
 //   `wrap` (ctx.execHost does not); finalize gets job.env (the harness environment without the key), job.wrap and
 //   ctx.execHarness(args), which runs `<wrap> <bin> args` in that environment.
+// Windows (the section "Windows: the process helper" below): no process groups, no signals but TerminateProcess, no
+//   /proc, no ps. A C# helper compiled once with the csc.exe of .NET Framework 4 reads start times, the process table
+//   and the boot id, and runs the harness and every auxiliary command inside a Job Object of its own. The helper
+//   stands for the process group: its pid is the "pgid" of every record and check, and one TerminateProcess to it ends
+//   the whole tree, also descendants whose parent has ended. Every ladder step is that TerminateProcess.
 //
 // Exit codes: 0 success · 1 runtime failure · 2 usage error or guard refusal (no job started).
 
@@ -101,6 +106,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const CLI_NAME = "agent-dispatch";
 export const RUN_VERB = "__run";
@@ -159,11 +165,22 @@ export const ENV_ALLOW = [
   "RBENV_ROOT", "ASDF_DIR", "ASDF_DATA_DIR", "HOMEBREW_PREFIX", "HOMEBREW_CELLAR", "HOMEBREW_REPOSITORY",
   "DEVELOPER_DIR", "ANDROID_HOME", "ANDROID_SDK_ROOT",
 ];
+// Windows: what every Windows program expects — SystemRoot above all: without it Winsock fails, and with it Node's
+// network and TLS — and where a user's tools keep their settings. On Windows every name is matched without regard to
+// case, as Windows treats them (process.env there holds "Path", not "PATH").
+export const ENV_ALLOW_WINDOWS = [
+  "SystemRoot", "windir", "SystemDrive", "ComSpec", "PATHEXT", "TEMP", "TMP", "OS", "USERPROFILE", "USERNAME",
+  "USERDOMAIN", "COMPUTERNAME", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "ProgramData", "ALLUSERSPROFILE",
+  "PUBLIC", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "CommonProgramFiles", "CommonProgramFiles(x86)",
+  "CommonProgramW6432", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER",
+];
 // XDG_* matters for OpenCode with "home": "user" (spec §3.10).
 export const ENV_ALLOW_PREFIXES = ["LC_", "XDG_"];
 export const ENV_DENY = [/_(TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIALS)$/i, /^(AWS|GITHUB|GH|ANTHROPIC|OPENAI|CLAUDE)_/i];
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 // --------------------------------------------------------------------------------------------------------------
+
+const IS_WIN = process.platform === "win32";
 
 const CLOSE_WAIT_MS = 5_000;
 const STARTUP_GRACE_MS = 60_000;
@@ -249,6 +266,21 @@ export function ensurePrivateDir(dir) {
 let tmpSeq = 0;
 const tmpFile = (file) => `${file}.tmp-${process.pid}-${++tmpSeq}`;
 
+// rename(2) over an existing file. Windows refuses it (EPERM, EACCES, EBUSY) while another program holds the target
+// open without delete sharing — a virus scanner or an indexer, for a moment; Node itself always shares — so there it
+// is retried for up to about a second.
+function renameOver(from, to) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (error) {
+      if (!IS_WIN || attempt >= 20 || !["EPERM", "EACCES", "EBUSY"].includes(error.code)) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+}
+
 // Atomic write with a fixed mode (umask cannot widen it); the parent directory is made private. A failed write
 // removes its temp copy, which may hold a secret.
 export function writePrivateFile(file, content, mode = 0o600) {
@@ -257,7 +289,7 @@ export function writePrivateFile(file, content, mode = 0o600) {
   try {
     fs.writeFileSync(tmp, content, { mode, flag: "wx" });
     fs.chmodSync(tmp, mode);
-    fs.renameSync(tmp, file);
+    renameOver(tmp, file);
   } finally {
     fs.rmSync(tmp, { force: true });
   }
@@ -279,23 +311,32 @@ export const isDenied = (name) => ENV_DENY.some((pattern) => pattern.test(name))
 // The caller's variables a harness may see. `inherit` re-admits names despite ENV_DENY: an adapter's native home
 // variable (CLAUDE_CONFIG_DIR, PI_CODING_AGENT_DIR, DSH_HOME) for "home": "user", when it is set.
 export function filterEnv(source = process.env, { inherit = [] } = {}) {
-  const passthrough = new Set(passthroughNames(source));
-  const allow = new Set(ENV_ALLOW);
-  const readmit = new Set(inherit);
+  const fold = IS_WIN ? (name) => name.toUpperCase() : (name) => name;
+  const passthrough = new Set(passthroughNames(source).map(fold));
+  const allow = new Set([...ENV_ALLOW, ...(IS_WIN ? ENV_ALLOW_WINDOWS : [])].map(fold));
+  const readmit = new Set(inherit.map(fold));
   const env = {};
   for (const [name, value] of Object.entries(source)) {
     if (value === undefined) continue;
-    const prefixed = ENV_ALLOW_PREFIXES.some((prefix) => name.startsWith(prefix));
-    if (passthrough.has(name) || allow.has(name) || readmit.has(name) || (prefixed && !isDenied(name))) env[name] = value;
+    const key = fold(name);
+    const prefixed = ENV_ALLOW_PREFIXES.some((prefix) => key.startsWith(prefix));
+    if (passthrough.has(key) || allow.has(key) || readmit.has(key) || (prefixed && !isDenied(name))) env[name] = value;
   }
   return env;
+}
+
+// Sets (or, with null, removes) one variable. On Windows it first removes the name in any other case: "PATH" from a
+// profile must replace the inherited "Path", not sit next to it.
+function setVar(env, name, value) {
+  if (IS_WIN) for (const other of Object.keys(env)) if (other !== name && other.toUpperCase() === name.toUpperCase()) delete env[other];
+  if (value === null || value === undefined) delete env[name];
+  else env[name] = String(value);
 }
 
 function applyLayer(env, layer, label) {
   for (const [name, value] of Object.entries(layer ?? {})) {
     if (!ENV_NAME_RE.test(name)) throw new UsageError(`${label}: invalid variable name ${JSON.stringify(name)}`);
-    if (value === null || value === undefined) delete env[name];
-    else env[name] = String(value);
+    setVar(env, name, value);
   }
 }
 
@@ -312,7 +353,7 @@ export function buildEnv({ source = process.env, inherit = [], defaults = {}, pr
     if (typeof secret !== "string" || secret === "") throw new Error(`no key was handed over for ${secretEnv.join(", ")}`);
     for (const name of secretEnv) {
       if (!ENV_NAME_RE.test(name)) throw new UsageError(`secretEnv: invalid variable name ${JSON.stringify(name)}`);
-      env[name] = secret;
+      setVar(env, name, secret);
     }
   }
   return env;
@@ -491,7 +532,7 @@ export function readRecord(file) {
 function writeRecord(file, record) {
   const tmp = tmpFile(file);
   fs.writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`);
-  fs.renameSync(tmp, file);
+  renameOver(tmp, file);
 }
 
 // Terminal statuses are sticky: a completed / failed / cancelled record is never rewritten by anyone but its claimer,
@@ -639,9 +680,10 @@ export function recordGroups(file, pgids, by) {
   if (!log) return false;
   const known = new Set([groupKey(log.childPid, log.childStartedAt), ...log.groups.map((group) => groupKey(group.pgid, group.startedAt))]);
   const fresh = [];
+  const starts = processStarts(pgids);
   for (const pgid of new Set(pgids)) {
     if (!Number.isInteger(pgid) || pgid <= 1) continue;
-    const startedAt = processStart(pgid);
+    const startedAt = starts.get(pgid) ?? null;
     if (startedAt === null && !isAlive(pgid)) continue; // leaderless
     if (known.has(groupKey(pgid, startedAt))) continue;
     known.add(groupKey(pgid, startedAt));
@@ -903,9 +945,10 @@ export function isAlive(pid) {
 }
 
 // The ids of `pgids` whose group still has a member that has not ended. pid 1 is never a harness process group, and
-// kill(-1) would signal every process of the user.
+// kill(-1) would signal every process of the user. On Windows a "group" is a helper's job (see "Windows: the process
+// helper"), which lives exactly as long as its helper.
 function liveGroups(pgids) {
-  const found = pgids.filter((pgid) => Number.isInteger(pgid) && pgid > 1 && signalable(-pgid));
+  const found = pgids.filter((pgid) => Number.isInteger(pgid) && pgid > 1 && signalable(IS_WIN ? pgid : -pgid));
   const zombies = zombieGroups(found);
   return found.filter((pgid) => !zombies.has(pgid));
 }
@@ -914,10 +957,13 @@ export function groupAlive(pgid) {
   return liveGroups([pgid]).length > 0;
 }
 
+// Windows: TerminateProcess to the group's helper, whatever the signal (no other signal exists there), which ends
+// its job and everything in it.
 export function killGroup(pgid, signal) {
   if (!Number.isInteger(pgid) || pgid <= 1) return;
   try {
-    process.kill(-pgid, signal);
+    if (IS_WIN) process.kill(pgid, "SIGKILL");
+    else process.kill(-pgid, signal);
   } catch {
     // group already gone
   }
@@ -926,8 +972,19 @@ export function killGroup(pgid, signal) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // One snapshot of every process: [{ pid, ppid, pgid }], or null when ps cannot run. `ps -A -o pid=,ppid=,pgid=` works
-// on macOS (no /proc there) and Linux (spec §3.10).
+// on macOS (no /proc there) and Linux (spec §3.10). Windows: the helper's `ps`, where every process is a group of its
+// own (pgid = pid) and each row also carries its start time (`start`, null when unreadable).
 export function processTable() {
+  if (IS_WIN) {
+    const text = winQuery(["ps"]);
+    if (text === null) return null;
+    const rows = [];
+    for (const line of text.split("\n")) {
+      const match = /^(\d+) (\d+) (\S+)$/.exec(line.trim());
+      if (match) rows.push({ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[1]), start: match[3].startsWith(WIN_START_PREFIX) ? match[3] : null });
+    }
+    return rows;
+  }
   for (const ps of ["ps", "/bin/ps"]) {
     const r = spawnSync(ps, ["-A", "-o", "pid=,ppid=,pgid="], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" });
     if (r.error || r.status !== 0) continue;
@@ -948,11 +1005,7 @@ export function processTable() {
 export function treeGroups(roots, table) {
   const groups = new Set(roots.filter((pgid) => Number.isInteger(pgid) && pgid > 1));
   if (!Array.isArray(table)) return groups;
-  const children = new Map();
-  for (const row of table) {
-    if (!children.has(row.ppid)) children.set(row.ppid, []);
-    children.get(row.ppid).push(row);
-  }
+  const children = childrenOf(table);
   const seen = new Set();
   for (let size = -1; size !== groups.size;) {
     size = groups.size;
@@ -970,6 +1023,23 @@ export function treeGroups(roots, table) {
   return groups;
 }
 
+// The rows of a snapshot by their parent's pid. Windows keeps a process's parent id after the parent has ended and
+// hands that id out again, so there a row counts as a child of the process now holding its ppid only when it did not
+// start before that process; where either start time is unknown (and everywhere else) every ppid link holds.
+const startTicks = (start) => (typeof start === "string" && start.startsWith(WIN_START_PREFIX) ? BigInt(start.slice(WIN_START_PREFIX.length)) : null);
+function childrenOf(table) {
+  const byPid = new Map(table.map((row) => [row.pid, row]));
+  const children = new Map();
+  for (const row of table) {
+    const own = startTicks(row.start);
+    const parent = startTicks(byPid.get(row.ppid)?.start);
+    if (own !== null && parent !== null && own < parent) continue;
+    if (!children.has(row.ppid)) children.set(row.ppid, []);
+    children.get(row.ppid).push(row);
+  }
+  return children;
+}
+
 const ownPgid = (table) => table?.find((row) => row.pid === process.pid)?.pgid ?? null;
 const rootList = (roots) => (Array.isArray(roots) ? roots : [roots]).filter((pgid) => Number.isInteger(pgid) && pgid > 1);
 
@@ -982,14 +1052,18 @@ const rootList = (roots) => (Array.isArray(roots) ? roots : [roots]).filter((pgi
 //     from another shell or time zone — reads the same text. macOS keeps the start as a wall-clock time stored at
 //     fork, so a clock step does not change it. Its resolution is one second: a pid reused within the second it was
 //     freed passes as the same process.
+//   Windows: `ft:<n>`, the creation time from GetProcessTimes in 100 ns units (the helper's `start`), fixed when the
+//     process is created.
 // `like` is a stored start time this one is to be compared with: it is read in that one's format (a value recorded
 // on another platform, or by an older core, is never compared with text of another kind). Null when it cannot be read.
 const TICKS_PREFIX = "ticks:";
+const WIN_START_PREFIX = "ft:";
 
 export function processStart(pid, { like = null } = {}) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   if (process.env[TEST_PS_START_VAR] === "unavailable") return null;
   const stored = typeof like === "string" && like !== "";
+  if (stored ? like.startsWith(WIN_START_PREFIX) : IS_WIN) return IS_WIN ? (processStarts([pid]).get(pid) ?? null) : null;
   if (stored ? like.startsWith(TICKS_PREFIX) : process.platform === "linux") {
     const ticks = procStartTicks(pid);
     if (ticks !== null) return `${TICKS_PREFIX}${ticks}`;
@@ -997,6 +1071,14 @@ export function processStart(pid, { like = null } = {}) {
     // A Linux without a readable /proc: lstart, the next best (such a value is compared as lstart from then on).
   }
   return psStart(pid);
+}
+
+// processStart() of several pids, as Map pid → start time or null: on Windows one helper call for all of them.
+export function processStarts(pids) {
+  const list = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
+  if (!IS_WIN || process.env[TEST_PS_START_VAR] === "unavailable") return new Map(list.map((pid) => [pid, processStart(pid)]));
+  const lines = list.length > 0 ? (winQuery(["start", ...list.map(String)]) ?? "").split("\n") : [];
+  return new Map(list.map((pid, index) => [pid, lines[index]?.trim().startsWith(WIN_START_PREFIX) ? lines[index].trim() : null]));
 }
 
 // The fields of a /proc/<pid>/stat line from field 3 (the state) on, or null. The command name (field 2) is in
@@ -1129,7 +1211,11 @@ export function normalizeLadder(ladder) {
   });
 }
 
-const ladderText = (ladder) => ladder.map(([signal, waitMs]) => (waitMs > 0 ? `${signal}, ${waitMs} ms` : signal)).join(" → ");
+// The ladder as it runs here. Windows has no polite signal: every step would be TerminateProcess, so the first one
+// ends the tree; the ladder becomes that one step, with the whole ladder's wait for the processes to go.
+const effectiveLadder = (ladder) => (IS_WIN ? [["SIGKILL", ladder.reduce((sum, [, waitMs]) => sum + waitMs, 0)]] : ladder);
+
+const ladderText = (ladder) => effectiveLadder(ladder).map(([signal, waitMs]) => (waitMs > 0 ? `${signal}, ${waitMs} ms` : signal)).join(" → ");
 
 // Stops a harness and everything it started (spec §3.6 А8): for each [signal, waitMs] step of the adapter's ladder,
 // a fresh snapshot adds the groups of new descendants, the signal goes to every live known group, and the step waits
@@ -1137,10 +1223,12 @@ const ladderText = (ladder) => ladder.map(([signal, waitMs]) => (waitMs > 0 ? `$
 // descendant forked during the last step does not survive. `roots` is one process group id or several. Never
 // signals pid ≤ 1, its own group or `exclude`. `onGroups(pgids)` hears of every group a snapshot adds, before any
 // signal reaches it (the runner, cancel and the reaper record them in the job's ownership log). Returns
-// { groups, sent, survivors }.
-export async function terminateTree(roots, ladder = DEFAULT_LADDER, { exclude = [], log = () => {}, onGroups = null } = {}) {
-  const steps = normalizeLadder(ladder);
+// { groups, sent, survivors }. `starts` (Map pgid → start time, as the caller verified it) matters on Windows only
+// (terminateTreeWindows).
+export async function terminateTree(roots, ladder = DEFAULT_LADDER, { exclude = [], log = () => {}, onGroups = null, starts = null } = {}) {
+  const steps = effectiveLadder(normalizeLadder(ladder));
   const seeds = rootList(roots);
+  if (IS_WIN) return terminateTreeWindows(seeds, steps[0][1], { skip: new Set([...exclude, process.pid]), log, starts });
   const known = new Set();
   const skip = new Set(exclude.filter((pgid) => Number.isInteger(pgid)));
   const refresh = () => {
@@ -1177,9 +1265,64 @@ export async function terminateTree(roots, ladder = DEFAULT_LADDER, { exclude = 
   return { groups: [...known], sent, survivors };
 }
 
+// Windows (see "Windows: the process helper"): the roots are helpers, each holding a job with its whole tree in it,
+// so no snapshot widens the stop, and every ladder step would be the same TerminateProcess: there is one, with the
+// ladder's whole wait. Windows hands a freed pid out again soon, so a root is signalled — in the re-sweep too — only
+// while it still has the start time it had when the stop began: `starts`' value (the caller verified it), else the
+// one read now. A root whose start time cannot be read is not signalled; one that is no longer signalable has ended.
+async function terminateTreeWindows(roots, waitMs, { skip, log, starts }) {
+  const targets = roots.filter((pid) => !skip.has(pid));
+  const fresh = processStarts(targets.filter((pid) => !starts?.get(pid)));
+  const identity = new Map();
+  for (const pid of targets) {
+    const start = starts?.get(pid) || fresh.get(pid);
+    if (start) identity.set(pid, start);
+  }
+  const gone = new Set();
+  const alive = (verify) => {
+    const left = [];
+    for (const pid of identity.keys()) {
+      if (gone.has(pid)) continue;
+      if (signalable(pid)) left.push(pid);
+      else gone.add(pid);
+    }
+    if (!verify || left.length === 0) return left;
+    const now = processStarts(left);
+    for (const pid of left) if (now.get(pid) !== identity.get(pid)) gone.add(pid);
+    return left.filter((pid) => !gone.has(pid));
+  };
+  const sent = [];
+  const first = alive(true);
+  if (first.length > 0) {
+    for (const pid of first) killGroup(pid, "SIGKILL");
+    sent.push(`SIGKILL to groups ${first.join(",")}`);
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline && alive(false).length > 0) await sleep(POLL_MS);
+  }
+  let survivors = alive(true);
+  for (let round = 0; round < SWEEP_ROUNDS && survivors.length > 0; round += 1) {
+    for (const pid of survivors) killGroup(pid, "SIGKILL");
+    sent.push(`SIGKILL (re-sweep) to groups ${survivors.join(",")}`);
+    await sleep(POLL_MS);
+    survivors = alive(true);
+  }
+  for (const line of sent) log(line);
+  if (survivors.length > 0) log(`still alive after the re-sweep: groups ${survivors.join(",")}`);
+  return { groups: [...identity.keys()], sent, survivors };
+}
+
 // One snapshot, one signal to the whole tree, no waiting: the reaper's tool for a job whose runner died. The caller
-// checks harnessGroupState() first. `onGroups` as for terminateTree.
-export function killTreeSync(roots, signal = "SIGKILL", { exclude = [], onGroups = null } = {}) {
+// checks harnessGroupState() first. `onGroups` as for terminateTree. Windows: the roots alone (their jobs hold the
+// rest), each only while its start time is `starts`' value (when given) and readable.
+export function killTreeSync(roots, signal = "SIGKILL", { exclude = [], onGroups = null, starts = null } = {}) {
+  if (IS_WIN) {
+    const skip = new Set([...exclude, process.pid]);
+    const targets = rootList(roots).filter((pid) => !skip.has(pid));
+    const now = processStarts(targets);
+    const verified = targets.filter((pid) => now.get(pid) && (!starts?.get(pid) || starts.get(pid) === now.get(pid)));
+    for (const pid of verified) killGroup(pid, signal);
+    return verified;
+  }
   const table = processTable();
   const skip = new Set([...exclude, ownPgid(table)].filter((pgid) => Number.isInteger(pgid)));
   const groups = [...treeGroups(rootList(roots), table)].filter((pgid) => pgid > 1 && !skip.has(pgid));
@@ -1201,14 +1344,17 @@ function tell(onGroups, groups) {
 // The process groups of everything a live process started, except its own group: a runner's harness and the
 // auxiliary commands of boundedExec (each leads a group of its own below the runner's supervisor). Callers verify
 // the pid's identity first (processIdentity) — the snapshot follows ppid links of whoever holds the pid now.
-function descendantGroupsOf(pid) {
+// Windows: its direct children only — the helpers of its harness and auxiliary commands, whose jobs hold the rest —
+// with their start times put into `starts`, so the stop signals exactly the processes this snapshot saw.
+function descendantGroupsOf(pid, starts = null) {
   if (!Number.isInteger(pid) || pid <= 1) return [];
   const table = processTable() ?? [];
   const own = table.find((row) => row.pid === pid)?.pgid ?? pid;
-  const children = new Map();
-  for (const row of table) {
-    if (!children.has(row.ppid)) children.set(row.ppid, []);
-    children.get(row.ppid).push(row);
+  const children = childrenOf(table);
+  if (IS_WIN) {
+    const direct = (children.get(pid) ?? []).filter((row) => row.pid !== pid && row.start);
+    for (const row of direct) starts?.set(row.pid, row.start);
+    return direct.map((row) => row.pid);
   }
   const groups = new Set();
   const seen = new Set();
@@ -1225,10 +1371,167 @@ function descendantGroupsOf(pid) {
   return [...groups];
 }
 
+// ---------- Windows: the process helper (bin/lib/win/agent-proc.cs) ----------
+// Windows has no process groups, no signal but TerminateProcess, no /proc, and no ps that knows parents and start
+// times. The core gets all of it from a small C# helper, compiled once per version of its source with the csc.exe of
+// .NET Framework 4 (part of every Windows 10 / 11) into <data root>/cache/agent-proc-<hash>.exe:
+//   - start times (`ft:<n>`, processStart), a snapshot of every process with its parent and start time
+//     (processTable) and the boot id (bootId);
+//   - containment. The harness (runCli) and every auxiliary command (boundedExec) run under `agent-proc run`, inside a
+//     Job Object of their own that kills its processes once its last handle closes and allows no breakaway. The
+//     helper stands for the POSIX process group: its pid is the "pgid" that records, the ownership log and every check
+//     name, killGroup() is one TerminateProcess to it, and the whole tree goes with it — also a descendant whose
+//     parent has ended, which no ppid snapshot could find. After a normal exit the helper terminates whatever the
+//     command left in its job before it exits itself, so the job is empty once the helper is gone.
+//   - The helper is a plain (not detached) child of its caller, and Node puts such children into a job of its own
+//     that kills them when the caller ends: a runner, a probe or a boundedExec caller that dies takes the tree with it.
+// It is compiled on first use; the path is fixed then, so a plugin update that replaces the core's directory during a
+// long job does not move a runner's helper. Without csc.exe nothing can be started on Windows (winHelperError says
+// why): every start time reads as unknown, which never authorizes a signal.
+const WIN_HELPER_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), "win", "agent-proc.cs");
+const WIN_COMPILE_TIMEOUT_MS = 120_000;
+let winHelperState = null; // { path } or { error }
+
+// The compiled helper, or null when it cannot be had (winHelperError()).
+export function winHelper() {
+  if (!winHelperState) winHelperState = loadWinHelper();
+  return winHelperState.path ?? null;
+}
+
+export const winHelperError = () => (winHelper() ? null : winHelperState.error);
+
+function cscPath(env = process.env) {
+  const root = env.SystemRoot || env.SYSTEMROOT || env.windir || "C:\\Windows";
+  return ["Framework64", "Framework"].map((dir) => path.join(root, "Microsoft.NET", dir, "v4.0.30319", "csc.exe")).find((file) => fs.existsSync(file)) ?? null;
+}
+
+function loadWinHelper() {
+  let source;
+  try {
+    source = fs.readFileSync(WIN_HELPER_SOURCE);
+  } catch (error) {
+    return { error: `cannot read ${WIN_HELPER_SOURCE}: ${error.code ?? error.message}` };
+  }
+  const dir = dataPaths().cache;
+  const exe = path.join(dir, `agent-proc-${createHash("sha1").update(source).digest("hex").slice(0, 12)}.exe`);
+  if (fs.existsSync(exe)) return { path: exe };
+  const csc = cscPath();
+  if (!csc) return { error: "csc.exe of .NET Framework 4 was not found under %SystemRoot%\\Microsoft.NET" };
+  try {
+    ensurePrivateDir(dir);
+  } catch (error) {
+    return { error: `cannot create ${dir}: ${error.code ?? error.message}` };
+  }
+  // Compiled under a name of its own and renamed into place: two processes compiling at once both end up with a
+  // complete binary.
+  const tmp = `${exe}.tmp-${process.pid}-${randomUUID()}.exe`;
+  try {
+    const r = spawnSync(csc, ["-nologo", "-utf8output", "-optimize+", "-target:exe", `-out:${tmp}`, WIN_HELPER_SOURCE], {
+      encoding: "utf8",
+      timeout: WIN_COMPILE_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+      windowsHide: true,
+    });
+    if (r.error || r.status !== 0) {
+      const first = `${r.stdout ?? ""}${r.stderr ?? ""}`.trim().split("\n")[0] ?? "";
+      return { error: `csc.exe could not compile ${WIN_HELPER_SOURCE} (${r.error?.code ?? `exit ${r.status}`})${first ? `: ${first.trim()}` : ""}` };
+    }
+    try {
+      fs.renameSync(tmp, exe);
+    } catch (error) {
+      if (!fs.existsSync(exe)) return { error: `cannot store the compiled helper as ${exe}: ${error.code ?? error.message}` };
+    }
+    return { path: exe };
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
+// One query to the helper (ps, start, boot): its stdout, or null when it cannot run or fails.
+function winQuery(args) {
+  const helper = winHelper();
+  if (!helper) return null;
+  const r = spawnSync(helper, args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL", windowsHide: true });
+  return r.error || r.status !== 0 ? null : r.stdout;
+}
+
+// One argument as libuv quotes it for a Windows command line (quote_cmd_arg), so the command parses exactly the argv
+// that spawn() would have handed it.
+export function quoteWindowsArg(arg) {
+  if (arg === "") return '""';
+  if (!/[ \t"]/.test(arg)) return arg;
+  if (!/["\\]/.test(arg)) return `"${arg}"`;
+  let quoted = '"';
+  let slashes = 0;
+  for (const ch of arg) {
+    if (ch === "\\") slashes += 1;
+    else if (ch === '"') {
+      quoted += `${"\\".repeat(slashes * 2 + 1)}"`;
+      slashes = 0;
+    } else {
+      quoted += `${"\\".repeat(slashes)}${ch}`;
+      slashes = 0;
+    }
+  }
+  return `${quoted}${"\\".repeat(slashes * 2)}"`;
+}
+
+// The executable `file` names, searched as libuv's search_path does on the PATH of the command's own environment: a
+// name with a directory part as given (relative to `cwd`), a bare name in each PATH directory; each time the name
+// itself only when it has an extension, then with .com and with .exe appended. Unlike libuv the working directory is
+// never searched for a bare name: a repository must not be able to plant the harness binary. Null when none exists.
+export function searchWindowsPath(file, env = process.env, cwd = process.cwd()) {
+  const name = String(file ?? "");
+  if (!name) return null;
+  const candidates = (base) => [...(path.extname(base) ? [base] : []), `${base}.com`, `${base}.exe`];
+  const isFile = (candidate) => {
+    try {
+      return fs.statSync(candidate).isFile();
+    } catch {
+      return false;
+    }
+  };
+  if (/[\\/:]/.test(name)) return candidates(path.resolve(cwd ?? process.cwd(), name)).find(isFile) ?? null;
+  const pathName = Object.keys(env ?? {}).find((key) => key.toUpperCase() === "PATH");
+  for (const dir of String((pathName && env[pathName]) || "").split(";")) {
+    const clean = dir.replace(/^"|"$/g, "");
+    if (!clean) continue;
+    const found = candidates(path.resolve(cwd ?? process.cwd(), clean, name)).find(isFile);
+    if (found) return found;
+  }
+  return null;
+}
+
+// argv as `agent-proc run` takes it: the executable (searchWindowsPath) and the quoted command line, both base64 of
+// UTF-8. Throws spawn()'s ENOENT error when the executable is not found.
+function windowsInvocation(argv, env, cwd) {
+  const [cmd, ...args] = argv;
+  const app = searchWindowsPath(cmd, env, cwd);
+  if (!app) throw Object.assign(new Error(`spawn ${cmd} ENOENT`), { code: "ENOENT", errno: -4058, syscall: `spawn ${cmd}`, path: cmd, spawnargs: args });
+  const b64 = (text) => Buffer.from(text, "utf8").toString("base64");
+  return [b64(app), b64(argv.map(quoteWindowsArg).join(" "))];
+}
+
+// A private scratch dir for one `agent-proc run --status-file`, and the status read back (null when the helper wrote
+// none: it was killed, or never started).
+function winStatusDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "agent-proc-"));
+}
+
+function readWinStatus(dir) {
+  const status = readJson(path.join(dir, "status.json"));
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // a temp dir; best effort
+  }
+  return isObject(status) ? status : null;
+}
+
 // ---------- boot identity: pids recorded in an earlier boot belong to nobody of ours ----------
 // After a reboot the runnerPid / childPid / holderPid in the state files may name unrelated processes. Records and
 // reservations store the boot id they were written in (kern.bootsessionuuid on macOS,
-// /proc/sys/kernel/random/boot_id on Linux):
+// /proc/sys/kernel/random/boot_id on Linux, the helper's `boot` on Windows: the BootId counter of the registry):
 //   current — the stored id equals the readable current id: the usual pid checks and signals apply;
 //   earlier — the stored id differs from the readable current id: dead without any pid check, never signalled;
 //   unknown — no stored id, or the current id is unreadable now: the pid checks decide liveness, but nothing is
@@ -1248,6 +1551,9 @@ function readBootId() {
     } catch {
       // no boot id: every stamp reads as unknown
     }
+  } else if (IS_WIN) {
+    const id = winQuery(["boot"])?.trim();
+    if (id && id !== "-") return `win:${id}`;
   }
   return null;
 }
@@ -1356,7 +1662,7 @@ function updateReservation(file, token, holderPid, holderStartedAt = null) {
   const temp = `${file}.tmp-${process.pid}-${randomUUID()}`;
   try {
     fs.writeFileSync(temp, `${JSON.stringify({ ...current, holderPid, holderStartedAt })}\n`, { flag: "wx", mode: 0o600, flush: true });
-    fs.renameSync(temp, file);
+    renameOver(temp, file);
   } finally {
     fs.rmSync(temp, { force: true });
   }
@@ -1484,7 +1790,8 @@ function reapOwnedSync(jobsDir, record) {
   const file = jobFile(jobsDir, record.id);
   const left = survivingGroups(jobsDir, record);
   const ours = left.filter((group) => group.state === "ours").map((group) => group.pgid);
-  const killed = ours.length > 0 ? killTreeSync(ours, "SIGKILL", { onGroups: (groups) => recordGroups(file, groups, "reaper") }) : [];
+  const starts = new Map(left.map((group) => [group.pgid, group.startedAt]));
+  const killed = ours.length > 0 ? killTreeSync(ours, "SIGKILL", { onGroups: (groups) => recordGroups(file, groups, "reaper"), starts }) : [];
   if (left.length === 0) markCleaned(file);
   return killed;
 }
@@ -1616,6 +1923,8 @@ export function boundedText(headMax, tailMax) {
 // model backgrounded does not outlive the job (spec §3.6 А8, §3.9); descendants already orphaned to init are out of
 // reach. `onGroups` goes to terminateTree. The result's `teardown` { survivors, error } is the outcome of that stop,
 // apart from the verdict: groups still alive after the ladder and its re-sweep, or the error that broke it off.
+// Windows: the harness runs under `agent-proc run` (see "Windows: the process helper"), whose pid stands for the group;
+// the helper itself ends what the harness leaves in its job, and the log says so.
 export function runCli({ argv, cwd, env, stdinPath = null, timeoutMs, logPath = null, onSpawn, shouldStop = null, redact = (text) => text, ladder = DEFAULT_LADDER, exclude = [], onGroups = null }) {
   return new Promise((resolve) => {
     const stdout = boundedText(STDOUT_HEAD_CHARS, STDOUT_TAIL_CHARS);
@@ -1651,13 +1960,13 @@ export function runCli({ argv, cwd, env, stdinPath = null, timeoutMs, logPath = 
       stoppedBy = label;
       clearInterval(poller);
       appendLog(logPath, `${reason}: ${ladderText(ladder)} to the process tree of ${child.pid}`);
-      stopping = terminateTree(child.pid, ladder, { exclude, onGroups, log: (line) => appendLog(logPath, `${label}: ${line}`) });
+      stopping = terminateTree(child.pid, ladder, { exclude, onGroups, starts: new Map([[child.pid, childStart]]), log: (line) => appendLog(logPath, `${label}: ${line}`) });
     };
     const sweepLeftovers = () => {
       if (harnessGroupState(child.pid, childStart) !== "ours") return null; // nothing left, or the pid is no longer ours
       stoppedBy = "cleanup";
       appendLog(logPath, `cleanup: the harness exited and left processes in its group; ${ladderText(ladder)} to the process tree of ${child.pid}`);
-      return terminateTree(child.pid, ladder, { exclude, onGroups, log: (line) => appendLog(logPath, `cleanup: ${line}`) });
+      return terminateTree(child.pid, ladder, { exclude, onGroups, starts: new Map([[child.pid, childStart]]), log: (line) => appendLog(logPath, `cleanup: ${line}`) });
     };
     const settleTeardown = async (stop) => {
       try {
@@ -1676,6 +1985,23 @@ export function runCli({ argv, cwd, env, stdinPath = null, timeoutMs, logPath = 
       clearInterval(poller);
       if (stopping) await settleTeardown(() => stopping);
       else if (child?.pid && !spawnError) await settleTeardown(sweepLeftovers);
+      if (winDir) {
+        // Windows: what the helper saw. A command it could not create is the spawn error spawn() would have given.
+        const status = readWinStatus(winDir);
+        if (status?.error && status.pid == null && !spawnError) {
+          spawnError = Object.assign(new Error(`spawn ${argv[0]} ${status.error.code}${status.error.detail ? ` (${status.error.detail})` : ""}`), {
+            code: status.error.code,
+            ...(os.constants.errno[status.error.code] ? { errno: -os.constants.errno[status.error.code] } : {}),
+            syscall: `spawn ${argv[0]}`,
+            path: argv[0],
+            spawnargs: argv.slice(1),
+          });
+        }
+        if (status?.leftovers > 0) {
+          appendLog(logPath, `cleanup: the harness exited and left ${status.leftovers} process(es) in its job; the helper terminated them`);
+          if (status.survivors > 0) appendLog(logPath, `cleanup: ${status.survivors} of them had not ended when the helper exited; the job kills them as it closes`);
+        }
+      }
       outLines.flush();
       errLines.flush();
       // A descendant that keeps the pipes open after the harness exited must not append to the log any more.
@@ -1697,9 +2023,18 @@ export function runCli({ argv, cwd, env, stdinPath = null, timeoutMs, logPath = 
       });
     };
     let stdinFd = null;
+    let winDir = null;
     try {
       if (stdinPath) stdinFd = fs.openSync(stdinPath, "r");
-      child = spawn(argv[0], argv.slice(1), { cwd, env, detached: true, stdio: [stdinFd ?? "ignore", "pipe", "pipe"] });
+      const stdio = [stdinFd ?? "ignore", "pipe", "pipe"];
+      if (IS_WIN) {
+        // The helper leads the harness's job (see "Windows: the process helper"): child.pid is the helper's.
+        const helper = winHelper();
+        if (!helper) throw Object.assign(new Error(`the Windows process helper is unavailable: ${winHelperError()}`), { code: "ESUPERVISOR" });
+        const invocation = windowsInvocation(argv, env, cwd);
+        winDir = winStatusDir();
+        child = spawn(helper, ["run", "--status-file", path.join(winDir, "status.json"), ...invocation], { cwd, env, windowsHide: true, stdio });
+      } else child = spawn(argv[0], argv.slice(1), { cwd, env, detached: true, stdio });
     } catch (error) {
       spawnError = error;
       finish();
@@ -1973,9 +2308,14 @@ function execError(code, cmd, args, { errno = null, detail = null } = {}) {
 // stderr, error, timedOut, stopped }; error is spawnSync's (code, errno, syscall, path, spawnargs) with code ETIMEDOUT
 // after the deadline, ECANCELED after a stop, ENOBUFS beyond maxBuffer, the spawn error's (ENOENT, …) otherwise, or
 // ESUPERVISOR when the supervisor itself failed.
+// Windows: the supervisor is `agent-proc run` (boundedExecWindows); graceMs means nothing there.
 export function boundedExec(cmd, args = [], { timeoutMs = EXEC_TIMEOUT_MS, graceMs = EXEC_GRACE_MS, cwd, env = process.env, input, stopFile = null, owner = null, maxBuffer = EXEC_MAX_BUFFER } = {}) {
   const argv = (Array.isArray(args) ? args : []).map(String);
   const ms = (value, fallback, min) => (typeof value === "number" && Number.isFinite(value) ? Math.min(Math.max(min, value), MAX_TIMER_MS) : fallback);
+  if (IS_WIN) {
+    const deadline = timeoutMs === null || timeoutMs === 0 ? 0 : ms(timeoutMs, EXEC_TIMEOUT_MS, 1);
+    return boundedExecWindows(String(cmd), argv, { timeoutMs: deadline, cwd, env, input, stopFile, ownerLog: owner ? runnerFile(owner) : null, maxBuffer });
+  }
   const binary = ArrayBuffer.isView(input);
   const config = {
     cmd: String(cmd),
@@ -2019,6 +2359,54 @@ export function boundedExec(cmd, args = [], { timeoutMs = EXEC_TIMEOUT_MS, grace
   const code = typeof res.error?.code === "string" ? res.error.code : "ESUPERVISOR"; // a failure without a code of its own
   const error = isObject(res.error) ? execError(code, config.cmd, argv, { errno: res.error.errno, detail: res.error.detail ?? null }) : null;
   return { status: res.status ?? null, signal: res.signal ?? null, stdout: res.stdout ?? "", stderr: res.stderr ?? "", error, timedOut: res.timedOut === true, stopped: res.stopped === true };
+}
+
+// boundedExec on Windows. `agent-proc run` is the supervisor: it records itself in the ownership log before it starts
+// the command, runs the command in a job of its own, ends that job at the deadline or once the stop file exists, and
+// ends what the command leaves in it after a normal exit. It is a plain child of this process, so this process's
+// death ends it — and with it the job. spawnSync's own timeout, EXEC_MARGIN_MS beyond the deadline, is the backstop
+// for a helper that hangs; a helper killed by it or by maxBuffer takes its job along.
+function boundedExecWindows(cmd, argv, { timeoutMs, cwd, env, input, stopFile, ownerLog, maxBuffer }) {
+  const fail = (code, detail, extra = {}) => ({ status: null, signal: null, stdout: "", stderr: "", error: execError(code, cmd, argv, { detail }), timedOut: false, stopped: false, ...extra });
+  const helper = winHelper();
+  if (!helper) return fail("ESUPERVISOR", `its supervisor failed: the Windows process helper is unavailable: ${winHelperError()}`);
+  let invocation;
+  try {
+    invocation = windowsInvocation([cmd, ...argv], env ?? process.env, cwd);
+  } catch {
+    return fail("ENOENT", null);
+  }
+  const dir = winStatusDir();
+  const r = spawnSync(
+    helper,
+    [
+      "run",
+      "--status-file", path.join(dir, "status.json"),
+      ...(timeoutMs > 0 ? ["--timeout", String(timeoutMs)] : []),
+      ...(stopFile ? ["--stop-file", stopFile] : []),
+      ...(ownerLog ? ["--owner-log", ownerLog] : []),
+      ...invocation,
+    ],
+    {
+      cwd: cwd ?? undefined,
+      env,
+      input: input ?? "",
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: timeoutMs > 0 ? timeoutMs + EXEC_MARGIN_MS : undefined,
+      killSignal: "SIGKILL",
+      maxBuffer,
+    },
+  );
+  const status = readWinStatus(dir);
+  const out = { stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  if (r.error?.code === "ENOBUFS") return fail("ENOBUFS", null, out);
+  if (!status) {
+    const why = r.error?.code ?? (r.signal ? `signal ${r.signal}` : `exit ${r.status}`);
+    return fail(r.error?.code === "ETIMEDOUT" ? "ETIMEDOUT" : "ESUPERVISOR", `its supervisor failed: ${why}`, { ...out, timedOut: r.error?.code === "ETIMEDOUT" });
+  }
+  const error = isObject(status.error) ? execError(status.error.code ?? "ESUPERVISOR", cmd, argv, { detail: status.error.detail ?? null }) : null;
+  return { status: Number.isInteger(status.status) ? status.status : null, signal: null, ...out, error, timedOut: status.timedOut === true, stopped: status.stopped === true };
 }
 
 function defaultExec(env, { stopFile = null, owner = null } = {}) {
@@ -2453,6 +2841,7 @@ async function startJobUnredacted({ adapter, profileName, profile, role, write, 
       runner = spawn(process.execPath, [cliPath, RUN_VERB, id, ws.jobsDir, reservation?.token ?? "-"], {
         cwd: ws.root,
         detached: true,
+        windowsHide: true,
         stdio: ["ignore", logFd, logFd],
         env: env[STATE_DIR_VAR] ? { ...env, [STATE_DIR_VAR]: stateRoot(env) } : env,
       });
@@ -2733,7 +3122,7 @@ export async function runProbe({
   let harnessStart = null;
   const onSignal = (signal) => {
     try {
-      if (harnessPid && harnessGroupState(harnessPid, harnessStart) === "ours") killTreeSync(harnessPid, "SIGKILL");
+      if (harnessPid && harnessGroupState(harnessPid, harnessStart) === "ours") killTreeSync(harnessPid, "SIGKILL", { starts: new Map([[harnessPid, harnessStart]]) });
     } catch {
       // the exit goes on
     }
@@ -2916,7 +3305,7 @@ export async function cancelCommand({ cwd, id, env = process.env } = {}, out = d
     appendLog(log, `cancel: ${fresh ? "record set to cancelled" : `the job is ${after.status}, cleanup pending`}; harness process group ${group} ${UNKNOWN_BOOT_NOTE}`);
     out.stdout(
       fresh
-        ? `cancelled ${record.id} (harness process group ${group} ${UNKNOWN_BOOT_NOTE}; check it with: ps -g ${procs.child.pid ?? "<pgid>"})\n`
+        ? `cancelled ${record.id} (harness process group ${group} ${UNKNOWN_BOOT_NOTE}; check it with: ${IS_WIN ? `tasklist /FI "PID eq ${procs.child.pid ?? "<pid>"}"` : `ps -g ${procs.child.pid ?? "<pgid>"}`})\n`
         : `${record.id} is ${after.status} (cleanup pending: harness process group ${group} ${UNKNOWN_BOOT_NOTE})\n`,
     );
     return 0;
@@ -2966,7 +3355,8 @@ async function stopJobTree(jobsDir, record, ladder, log, waitMs) {
   if (harness === "unknown") notes.push(`harness process group ${procs.child.pid} ${unconfirmedNote(procs.child.startedAt)}`);
   for (const group of left) if (!group.harness && group.state === "unknown") notes.push(`process group ${group.pgid} ${unconfirmedNote(group.startedAt)}`);
   const ours = left.filter((group) => group.state === "ours").map((group) => group.pgid);
-  const roots = [...ours, ...(runner === "ours" ? descendantGroupsOf(procs.runner.pid) : [])];
+  const starts = new Map(left.map((group) => [group.pgid, group.startedAt]));
+  const roots = [...ours, ...(runner === "ours" ? descendantGroupsOf(procs.runner.pid, starts) : [])];
   let survivors = [];
   if (roots.length > 0) {
     appendLog(log, runner === "ours" ? `cancel: runner pid ${procs.runner.pid} did not finish within ${waitMs} ms; cancel stops the tree itself` : "cancel: the runner is gone; cancel stops the tree itself");
@@ -2974,6 +3364,7 @@ async function stopJobTree(jobsDir, record, ladder, log, waitMs) {
       exclude: [procs.runner.pid].filter(Number.isInteger),
       log: (line) => appendLog(log, `cancel: ${line}`),
       onGroups: (groups) => recordGroups(file, groups, "cancel"),
+      starts,
     });
     survivors = stopped.survivors;
     if (survivors.length > 0) notes.push(`process groups still alive: ${survivors.join(",")}`);

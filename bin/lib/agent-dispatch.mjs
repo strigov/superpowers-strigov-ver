@@ -625,10 +625,36 @@ async function requireCoreAdapter(name, harness) {
 
 const wrapperPath = (pass, env = process.env) => env[pass.wrapper.envVar] || path.join(BIN_DIR, pass.wrapper.name);
 
+// Windows cannot start the bash wrappers (zcode-dispatch, codex-dispatch) by their path. They run under Git Bash, the
+// shell Claude Code itself uses there: $CLAUDE_CODE_GIT_BASH_PATH, else the bash.exe of the Git that git.exe on PATH
+// belongs to, else a bash.exe on PATH outside %SystemRoot% (System32\bash.exe starts WSL, another system). Null when
+// none is found; the wrapper then fails with spawn's ENOENT, as before.
+let gitBashPath;
+function gitBash(env = process.env) {
+  if (gitBashPath !== undefined) return gitBashPath;
+  const isFile = (file) => {
+    try {
+      return fs.statSync(file).isFile();
+    } catch {
+      return false;
+    }
+  };
+  const git = core.searchWindowsPath("git", env);
+  const nearGit = git ? [path.join(path.dirname(git), "..", "bin", "bash.exe"), path.join(path.dirname(git), "..", "..", "bin", "bash.exe")] : [];
+  const system = path.resolve(env.SystemRoot || env.windir || "C:\\Windows").toLowerCase();
+  const onPath = core.searchWindowsPath("bash", env);
+  const candidates = [env.CLAUDE_CODE_GIT_BASH_PATH, ...nearGit, onPath && !path.resolve(onPath).toLowerCase().startsWith(`${system}\\`) ? onPath : null];
+  gitBashPath = candidates.find((file) => typeof file === "string" && file && isFile(file)) ?? null;
+  return gitBashPath;
+}
+
+// The command and argv that run a wrapper: the wrapper itself, or Git Bash with it on Windows.
+const wrapperCommand = (file, argv) => (process.platform === "win32" ? [gitBash() ?? file, gitBash() ? [file, ...argv] : argv] : [file, argv]);
+
 // Runs a wrapper with stdio inherited: its stdout, stderr and exit code are the caller's (spec §3.3).
 function runWrapper(pass, argv) {
   const file = wrapperPath(pass);
-  const r = spawnSync(file, argv, { stdio: "inherit", env: process.env });
+  const r = spawnSync(...wrapperCommand(file, argv), { stdio: "inherit", env: process.env });
   if (r.error) throw new Error(`cannot run ${pass.wrapper.name} (${file}): ${r.error.code ?? r.error.message}`);
   if (r.status !== null) return r.status;
   return 128 + (os.constants.signals[r.signal] ?? 0);
@@ -642,7 +668,7 @@ function queryStore(pass, state, { cwd, all = false, allSessions = false } = {})
   const argv = ["status", "--json", ...(cwd !== undefined ? ["--cwd", cwd] : []), ...(all ? ["--all"] : [])];
   const { CODEX_COMPANION_SESSION_ID: _session, ...unscoped } = process.env;
   const env = allSessions ? unscoped : process.env;
-  const r = spawnSync(file, argv, { encoding: "utf8", env, timeout: STORE_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync(...wrapperCommand(file, argv), { encoding: "utf8", env, timeout: STORE_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024, windowsHide: true });
   if (r.error) return { error: `cannot run ${file}: ${r.error.code ?? r.error.message}` };
   if (r.status !== 0) {
     const first = (r.stderr ?? "").trim().split("\n")[0];
@@ -1297,6 +1323,8 @@ function checkKey(name, p, report) {
     if (!stat || !stat.isFile()) return report("FAIL", `key ${name}`, `no key ${auth.key} is stored; the user stores it: ${CLI_NAME} key set ${auth.key}`);
     if (!(readStoredKey(auth.key) ?? "").trim()) return report("FAIL", `key ${name}`, `${file} is empty; store the key again: ${CLI_NAME} key set ${auth.key}`);
     const mode = stat.mode & 0o777;
+    // Windows has no file modes: the user profile's ACL keeps the data root private.
+    if (process.platform === "win32") return report("ok", `key ${name}`, `${auth.key} in ${file}`);
     if (mode !== 0o600) return report("WARN", `key ${name}`, `${file} has mode ${mode.toString(8)}, expected 600`);
     return report("ok", `key ${name}`, `${auth.key} in ${file} (mode 0600)`);
   }
@@ -1318,6 +1346,10 @@ function checkSandbox(name, p, report) {
   if (p.sandbox !== "native") return;
   if (p.harness === "opencode" || p.harness === "pi") {
     report("WARN", `sandbox ${name}`, `${p.harness} has no sandbox of its own; "sandbox": "native" does nothing — use "wrap" (spec §3.7)`);
+    return;
+  }
+  if (process.platform === "win32") {
+    report("FAIL", `sandbox ${name}`, `native: ${p.harness} has no sandbox on Windows (Seatbelt on macOS, bubblewrap on Linux only); drop "sandbox" or use "wrap"`);
     return;
   }
   if (process.platform === "darwin") {
@@ -1359,7 +1391,7 @@ function codexSetup(checks) {
   if (checks.codexSetup) return checks.codexSetup;
   const pass = PASS_THROUGH.codex;
   const file = wrapperPath(pass);
-  const r = spawnSync(file, ["setup", "--json"], { encoding: "utf8", env: process.env, timeout: STORE_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 });
+  const r = spawnSync(...wrapperCommand(file, ["setup", "--json"]), { encoding: "utf8", env: process.env, timeout: STORE_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, windowsHide: true });
   let result;
   if (r.error) result = { error: `cannot run ${pass.wrapper.name} setup --json: ${r.error.code ?? r.error.message}` };
   else if (r.status !== 0) result = { error: `${pass.wrapper.name} setup --json exited ${r.status ?? r.signal}${r.stderr?.trim() ? `: ${oneLine(r.stderr)}` : ""}` };
@@ -1538,13 +1570,19 @@ async function cmdDoctor(args) {
     if (fs.existsSync(root)) {
       fs.accessSync(root, fs.constants.W_OK);
       const mode = fs.statSync(root).mode & 0o777;
-      if (mode & 0o077) report("WARN", "state-dir", `${root} has mode ${mode.toString(8)}; expected 700`);
+      if (mode & 0o077 && process.platform !== "win32") report("WARN", "state-dir", `${root} has mode ${mode.toString(8)}; expected 700`);
       else report("ok", "state-dir", root);
     } else {
-      report("ok", "state-dir", `${root} (created on first use, mode 0700)`);
+      report("ok", "state-dir", `${root} (created on first use${process.platform === "win32" ? "" : ", mode 0700"})`);
     }
   } catch (error) {
     report("FAIL", "state-dir", `${root} is not writable: ${error.message}`);
+  }
+  if (process.platform === "win32") {
+    // Windows: every background job and auxiliary command runs under the compiled process helper (agent-core.mjs).
+    const helper = core.winHelper();
+    if (helper) report("ok", "platform", `win32: process helper ${helper} (each job in a Job Object; a stop is TerminateProcess, no polite signal)`);
+    else report("FAIL", "platform", `win32: ${core.winHelperError()}; no job of a core harness (claude, opencode, pi, dsh) can start`);
   }
   try {
     const names = core.passthroughNames();
