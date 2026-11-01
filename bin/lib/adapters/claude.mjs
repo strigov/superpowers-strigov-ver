@@ -316,6 +316,12 @@ function planOf(req, ctx, { probe, refuse = true }) {
   if (profile.model) argv.push("--model", profile.model);
   if (effort) argv.push("--effort", effort);
   argv.push("--tools", tools);
+  // A writer names its tools as allow rules too: with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB set (every mode, above) Claude
+  // Code 2.1.310 forces the permission mode to default unless allowedTools is declared ("Permission mode forced to
+  // default — … Declare allowedTools explicitly"), and `-p` then refuses every Bash, Write and Glob call it would ask
+  // about: the job ends `completed` with permission_denials and a "blocked" answer (job ct-0001 of a kimi-code
+  // profile, 2026-10-26). The rules grant nothing past --tools, which bypassPermissions already runs in full.
+  if (writer) argv.push("--allowedTools", tools);
   if (reviewer) argv.push("--allowedTools", ...REVIEWER_ALLOWED);
   // One --append-system-prompt-file: whether the flag repeats is unverified [01]; spec §3.6 A6 passes one file.
   argv.push("--strict-mcp-config", "--disable-slash-commands", "--append-system-prompt-file", systemPath);

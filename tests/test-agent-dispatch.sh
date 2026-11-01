@@ -1060,9 +1060,12 @@ console.log([keys, JSON.stringify(luna.linked), luna.auth, luna.source, api.auth
 
     run_ad preset list
     n="$(grep -c . <<<"$OUT")"
-    [[ "$RC" -eq 0 && "$n" -eq 12 && "$OUT" == *"claude-zai harness=claude auth=key:zai model=glm-5.3[1m] endpoint=https://api.z.ai/api/anthropic shares=zai-coding-plan"* \
-        && "$OUT" == *"opencode-key harness=opencode auth=key:<name> model=<provider/model> keyVar=<VAR> (fill: <name> <VAR> <provider/model>)"* ]]
-    verdict "12 preset list: the 12 presets of §4.2 with their placeholders" $? "lines=$n" "$OUT"
+    [[ "$RC" -eq 0 && "$n" -eq 15 && "$OUT" == *"claude-zai harness=claude auth=key:zai model=glm-5.3[1m] endpoint=https://api.z.ai/api/anthropic shares=zai-coding-plan"* \
+        && "$OUT" == *"opencode-key harness=opencode auth=key:<name> model=<provider/model> keyVar=<VAR> (fill: <name> <VAR> <provider/model>)"* \
+        && "$OUT" == *"claude-kimi-code harness=claude auth=key:kimi-code model=k3.1-pro endpoint=https://api.kimi.ai/coding/"* \
+        && "$OUT" == *"opencode-go harness=opencode auth=key:opencode-go model=opencode-go/<model> keyVar=OPENCODE_API_KEY (fill: <model>)"* \
+        && "$OUT" == *"opencode-deepinfra harness=opencode auth=key:deepinfra model=deepinfra/zai-org/GLM-5.3 keyVar=DEEPINFRA_API_KEY"* ]]
+    verdict "12 preset list: the 15 presets of §4.2 with their placeholders" $? "lines=$n" "$OUT"
 
     no_config
     run_ad profile add glm-api --from claude-zai --set effort=max
@@ -1518,8 +1521,8 @@ for (const [name, preset] of Object.entries(cli.DEFAULTS.presets)) {
   }
 }
 console.log(bad.length ? bad.join("\n") : `ok ${n}`);' 2>&1)"
-    [[ "$OUT" == "ok 12" ]]
-    verdict "14 every §4.2 preset (12), filled, passes checkProfile and plans on its real adapter with no env conflict" $? "$OUT"
+    [[ "$OUT" == "ok 15" ]]
+    verdict "14 every §4.2 preset (15), filled, passes checkProfile and plans on its real adapter with no env conflict" $? "$OUT"
 
     # --- 15. in-session roles on external profiles, end to end (increment 6, spec §8 row 6) ---
     # route → task --role with the recipe's --write → status → result on the four real adapters; the harness argv per

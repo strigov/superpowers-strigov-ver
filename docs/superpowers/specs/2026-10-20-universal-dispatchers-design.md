@@ -541,6 +541,7 @@ state/<ws>/jobs/    задачи ct-, oc-, pi-, dt-
 | `claude-zai` | claude | `{key: zai}` | `https://api.z.ai/api/anthropic` | `glm-5.3[1m]` | `API_TIMEOUT_MS=3000000`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000`; `shares: zai-coding-plan` |
 | `claude-deepseek` | claude | `{key: deepseek}` | `https://api.deepseek.com/anthropic` | `deepseek-v4-pro[1m]` | `CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432` |
 | `claude-kimi` | claude | `{key: kimi}` | `https://api.moonshot.ai/anthropic` | `kimi-k3[1m]` | — |
+| `claude-kimi-code` | claude | `{key: kimi-code}` | `https://api.kimi.ai/coding/` | `k3.1-pro` (K2.8 Preview: `--model kimi-k2.8-preview`) | `authHeader: x-api-key`, `CLAUDE_CODE_EFFORT_LEVEL=max`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW=262144`, `CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144` |
 | `claude-minimax` | claude | `{key: minimax}` | `https://api.minimax.io/anthropic` | `MiniMax-M3.1-Flash[1m]` | `CLAUDE_CODE_AUTO_COMPACT_WINDOW=524288` |
 | `claude-alibaba` | claude | `{key: alibaba}` | `https://<WorkspaceId>.<регион>.maas.aliyuncs.com/apps/anthropic` | `<model>` (например, `qwen3.8-max`) | эндпоинт задаётся через `--set endpoint=…` |
 | `claude-openrouter` | claude | `{key: openrouter}` | `https://openrouter.ai/api` | `<model>` | `authHeader: bearer`, `ANTHROPIC_API_KEY=""` |
@@ -548,6 +549,8 @@ state/<ws>/jobs/    задачи ct-, oc-, pi-, dt-
 | `dsh-deepseek` | dsh | `{key: deepseek}` | (`https://api.deepseek.com/anthropic`) | `deepseek-v4-pro`, effort `high` | — |
 | `opencode-login` | opencode | `login` | — | `<provider/model>` | — |
 | `opencode-key` | opencode | `{key: <name>}` | — | `<provider/model>` | `keyVar: <VAR>` (таблица §3.4) |
+| `opencode-go` | opencode | `{key: opencode-go}` | — | `opencode-go/<model>` | `keyVar: OPENCODE_API_KEY` |
+| `opencode-deepinfra` | opencode | `{key: deepinfra}` | — | `deepinfra/zai-org/GLM-5.3` | `keyVar: DEEPINFRA_API_KEY` |
 | `pi-key` | pi | `{key: <name>}` | — | `<provider/id>` | `keyVar: <VAR>` (таблица §3.4) |
 
 ### 4.3 Что пользователь делает один раз и как проверить
