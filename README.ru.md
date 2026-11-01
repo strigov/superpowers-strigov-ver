@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img alt="Версия 0.14.0" src="https://img.shields.io/badge/version-0.14.0-7c8cff?style=flat-square">
+  <img alt="Версия 0.15.0" src="https://img.shields.io/badge/version-0.15.0-7c8cff?style=flat-square">
   <img alt="Плагин Claude Code" src="https://img.shields.io/badge/Claude_Code-plugin-d97757?style=flat-square">
   <img alt="Лицензия MIT" src="https://img.shields.io/badge/license-MIT-35d6a6?style=flat-square">
 </p>
@@ -174,7 +174,7 @@ agent-dispatch doctor --profile deepseek-claude --probe             # 3. про�
 2. Ключ вы кладёте сами, в своём терминале: `key set <имя>` запрашивает его скрытым вводом. Из сессии Claude Code ключ можно передать через pipe: `! pbpaste | agent-dispatch key set <имя>`, на Linux — `wl-paste` или `xclip -o -selection clipboard`. Ключ, переданный аргументом, отвергается. Профиль с `login` пользуется собственным входом харнесса. Для профиля с отдельным изолированным каталогом войдите в нём так: `agent-dispatch profile env <имя> -- <команда входа>` — `-- opencode auth login`, или `-- claude`, затем `/login`, или `-- pi`, затем `/login`.
 3. `doctor --profile <имя>` проверяет всё, что можно проверить без вызова модели. `--probe` добавляет один короткий платный запрос на вашем ключе или подписке; его запускаете вы, пайплайн — никогда.
 
-Все пресеты рассчитаны на `claude`, `dsh`, OpenCode или pi, а в 0.12.0 есть адаптеры всех четырёх, поэтому профиль из пресета готов к работе, как только проходит `doctor`. Профили на других харнессах пишутся вручную: другая модель или effort Codex либо другая модель Claude в сессии. Например, более дешёвое контрольное ревью и автор плана на Sonnet:
+Все пресеты рассчитаны на `claude`, `dsh`, OpenCode, pi или `kimi`, и адаптеры есть у всех пяти (`kimi` — с 0.15.0), поэтому профиль из пресета готов к работе, как только проходит `doctor`. Профили на других харнессах пишутся вручную: другая модель или effort Codex либо другая модель Claude в сессии. Например, более дешёвое контрольное ревью и автор плана на Sonnet:
 
 ```json
 {
@@ -295,6 +295,18 @@ agent-dispatch doctor --profile deepseek-claude --probe             # 3. про�
 | Ревьюер | Режим dsh `read-only`, песочница ОС: читает и запускает команды, любая запись запрещена. Пишущая роль работает в `danger-full-access` |
 | Кто видит ключ | dsh убирает переменные `*KEY*` и `*TOKEN*` из окружения своих инструментов |
 
+### Kimi Code CLI (`kimi`)
+
+| | |
+|---|---|
+| Установка | `npm i -g @moonshot-ai/kimi-code@2.4.1`. Проверено: 2.4.1 (по исходникам; о другой версии предупредит `doctor`). На Windows npm ставит `.cmd`-обёртку, а она не запускается: задайте профилю `"wrap": ["node"]` и `"bin": "<npm prefix>\\node_modules\\@moonshot-ai\\kimi-code\\dist\\main.mjs"` (префикс печатает `npm prefix -g`, обычно `%APPDATA%\\npm`) |
+| Ключ | Пресет `kimi-code`: `key set kimi-code`, модель `k3.1-pro`; K2.8 Preview: `profile add kimi-k28 --from kimi-code --model kimi-k2.8-preview`. Профиль с ключом работает в изолированном каталоге (`homes/<профиль>/kimi`), где `agent-dispatch` перед каждой задачей пишет `config.toml`: один провайдер типа `kimi` на `endpoint` (по умолчанию `https://api.kimi.ai/coding/v1`; материковый Китай — `https://api.kimi.com/coding/v1`), чей `api_key_env` называет `AGENT_DISPATCH_KIMI_API_KEY`, и модель профиля как единственный алиас. Сам ключ ни в какой файл не пишется. Имя ключа то же, что у `claude-kimi-code`, поэтому при `auth` или `quota` оба профиля выбывают вместе |
+| Вход | `"auth": "login"`: `kimi login` в вашем `~/.kimi-code` (или `$KIMI_CODE_HOME`), либо с `"home": "isolated"` через `agent-dispatch profile env <имя> -- kimi login`. Модель — алиас из `config.toml` этого каталога, например `kimi-code/k3` |
+| Модель, effort | `model` уходит в `-m`, `effort` — в `KIMI_MODEL_THINKING_EFFORT`. `options.contextSize` задаёт `max_context_size` алиаса (по умолчанию 262144) |
+| Промпт | kimi читает промпт только из `-p`, поэтому он идёт в командной строке: до 120 КиБ на Linux, 200 КиБ на macOS, около 30 000 символов на Windows. Более длинный промпт отклоняется при `task` или роняет задачу с классом `context` в раннере — его берёт следующий профиль |
+| Ревьюер | `-p` одобряет любые инструменты (режим «auto» у kimi), так что пишущая роль может всё. Ревьюер получает `--agent-file` только с `Read`, `Glob`, `Grep` (без git) и никогда не продолжается (resume) |
+| По умолчанию | телеметрия, проверка обновлений и cron выключены; фоновые задачи хода останавливаются в его конце (`KIMI_CODE_BACKGROUND_PRINT_BACKGROUND_MODE=exit`); навыки пользователя и проекта выключены (`--skills-dir` пустого каталога); `KIMI_MODEL_*` и `KIMI_CODE_TRUST_WORKSPACE` убираются. Лимит подписки Kimi Code, который API отдаёт только как HTTP 429, считается `rate-limit`, а не `quota` (текста про лимит подписки в исходниках 2.4.1 нет) |
+
 ### ZCode и Codex
 
 - **ZCode** (`glm`): настройка — как в [Быстром старте](#1-установите-зависимости) и [Linux: ZCode для канала GLM](#linux-zcode-для-канала-glm). Профиль без изменений передаётся в `zcode-dispatch`; модель закрепляет обёртка.
@@ -370,7 +382,7 @@ agent-dispatch profile add glm-api      --from claude-zai     # key set zai
 
 ### Песочница (по желанию)
 
-`sandbox` и `wrap` есть только у профилей `claude`, `opencode`, `pi` и `dsh`; `doctor` проверяет оба поля. По умолчанию песочница выключена (`"sandbox": "off"`): пишущая роль тогда работает с полным доступом (claude `bypassPermissions`, dsh `danger-full-access`), как ZCode с `--mode yolo`.
+`sandbox` и `wrap` есть только у профилей `claude`, `opencode`, `pi`, `dsh` и `kimi`; `doctor` проверяет оба поля. По умолчанию песочница выключена (`"sandbox": "off"`): пишущая роль тогда работает с полным доступом (claude `bypassPermissions`, dsh `danger-full-access`), как ZCode с `--mode yolo`.
 
 | Харнесс | `"sandbox": "native"` |
 |---|---|

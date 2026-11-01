@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version 0.14.0" src="https://img.shields.io/badge/version-0.14.0-7c8cff?style=flat-square">
+  <img alt="Version 0.15.0" src="https://img.shields.io/badge/version-0.15.0-7c8cff?style=flat-square">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude_Code-plugin-d97757?style=flat-square">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-35d6a6?style=flat-square">
 </p>
@@ -174,7 +174,7 @@ agent-dispatch doctor --profile deepseek-claude --probe             # 3. offline
 2. Store the key yourself, in your own terminal. `key set <name>` asks for it at a hidden prompt. From a Claude Code session you can pipe it instead: `! pbpaste | agent-dispatch key set <name>`, or on Linux `wl-paste` / `xclip -o -selection clipboard`. A key passed as an argument is refused. A `login` profile uses the harness's own login. For a profile with its own isolated directory, log in there with `agent-dispatch profile env <name> -- <login command>`: `-- opencode auth login`, or `-- claude` and then `/login`, or `-- pi` and then `/login`.
 3. `doctor --profile <name>` checks everything that can be checked without a model call. `--probe` adds one short paid request on your key or subscription; you run it, the pipeline never does.
 
-Every preset targets `claude`, `dsh`, OpenCode or pi, and 0.12.0 ships all four adapters, so a profile copied from a preset is ready once `doctor` passes. Profiles on the other harnesses are written by hand: another Codex model or effort, or another Claude model in the session. For example, a cheaper control review and a Sonnet plan writer:
+Every preset targets `claude`, `dsh`, OpenCode, pi or `kimi`, and all five adapters ship (`kimi` since 0.15.0), so a profile copied from a preset is ready once `doctor` passes. Profiles on the other harnesses are written by hand: another Codex model or effort, or another Claude model in the session. For example, a cheaper control review and a Sonnet plan writer:
 
 ```json
 {
@@ -295,6 +295,18 @@ A `models.json` for an endpoint of your own, with the profile's `"keyVar": "MY_K
 | Reviewer | dsh's `read-only` mode, an OS sandbox: it reads and runs commands, and every write is denied. A writer runs in `danger-full-access` |
 | Who sees the key | dsh strips `*KEY*` and `*TOKEN*` variables from its tools |
 
+### Kimi Code CLI (`kimi`)
+
+| | |
+|---|---|
+| Install | `npm i -g @moonshot-ai/kimi-code@2.4.1`. Verified: 2.4.1 (read from its source; `doctor` names another version). On Windows npm installs a `.cmd` shim, which is not started: give the profile `"wrap": ["node"]` and `"bin": "<npm prefix>\\node_modules\\@moonshot-ai\\kimi-code\\dist\\main.mjs"` (`npm prefix -g` prints the prefix, usually `%APPDATA%\\npm`) |
+| Key | Preset `kimi-code`: `key set kimi-code`, model `k3.1-pro`; K2.8 Preview: `profile add kimi-k28 --from kimi-code --model kimi-k2.8-preview`. A keyed profile runs in its isolated home (`homes/<profile>/kimi`), where `agent-dispatch` writes `config.toml` on every task: one provider of type `kimi` on `endpoint` (default `https://api.kimi.ai/coding/v1`; mainland China `https://api.kimi.com/coding/v1`) whose `api_key_env` names `AGENT_DISPATCH_KIMI_API_KEY`, and the profile's model as the only alias. The key is never written to a file. The same key name as `claude-kimi-code`, so the two profiles drop out together on `auth` or `quota` |
+| Login | `"auth": "login"`: `kimi login` in your own `~/.kimi-code` (or `$KIMI_CODE_HOME`), or with `"home": "isolated"` through `agent-dispatch profile env <name> -- kimi login`. The model is an alias of that home's `config.toml`, e.g. `kimi-code/k3` |
+| Model, effort | `model` goes to `-m`; `effort` to `KIMI_MODEL_THINKING_EFFORT`. `options.contextSize` sets the alias's `max_context_size` (default 262144) |
+| Prompt | kimi reads its prompt only from `-p`, so it travels on the command line: up to 120 KiB on Linux, 200 KiB on macOS, about 30 000 characters on Windows. A longer prompt is refused at task time, or fails the job with `context` in the runner — the next profile takes it |
+| Reviewer | `-p` approves every tool (kimi's "auto" mode), so a writer runs everything. A reviewer gets `--agent-file` with `Read`, `Glob`, `Grep` only (no git), and is never resumed |
+| Defaults | telemetry, update checks and cron off; background tasks of the turn are stopped at its end (`KIMI_CODE_BACKGROUND_PRINT_BACKGROUND_MODE=exit`); user and project skills off (`--skills-dir` of an empty dir); `KIMI_MODEL_*` and `KIMI_CODE_TRUST_WORKSPACE` removed. A Kimi Code membership limit that the API reports only as HTTP 429 counts as `rate-limit`, not `quota` (no membership text was found in the 2.4.1 source) |
+
 ### ZCode and Codex
 
 - **ZCode** (`glm`): set up as in [Quick start](#1-install-the-prerequisites) and [Linux: ZCode for the GLM channel](#linux-zcode-for-the-glm-channel). The profile passes through to `zcode-dispatch` unchanged; the wrapper pins the model.
@@ -370,7 +382,7 @@ More about routing:
 
 ### Sandbox (optional)
 
-`sandbox` and `wrap` are fields of `claude`, `opencode`, `pi` and `dsh` profiles only; `doctor` checks both. The sandbox is off by default (`"sandbox": "off"`): a writer then runs with full access (claude `bypassPermissions`, dsh `danger-full-access`), as ZCode runs `--mode yolo`.
+`sandbox` and `wrap` are fields of `claude`, `opencode`, `pi`, `dsh` and `kimi` profiles only; `doctor` checks both. The sandbox is off by default (`"sandbox": "off"`): a writer then runs with full access (claude `bypassPermissions`, dsh `danger-full-access`), as ZCode runs `--mode yolo`.
 
 | Harness | `"sandbox": "native"` |
 |---|---|

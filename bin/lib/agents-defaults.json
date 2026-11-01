@@ -108,6 +108,9 @@
     "dsh-deepseek": {
       "harness": "dsh", "auth": { "key": "deepseek" }, "model": "deepseek-v4-pro", "effort": "high"
     },
+    "kimi-code": {
+      "harness": "kimi", "auth": { "key": "kimi-code" }, "model": "k3.1-pro"
+    },
     "opencode-login": {
       "harness": "opencode", "auth": "login", "model": "<provider/model>"
     },

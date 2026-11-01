@@ -549,6 +549,7 @@ state/<ws>/jobs/    задачи ct-, oc-, pi-, dt-
 | `claude-openrouter` | claude | `{key: openrouter}` | `https://openrouter.ai/api` | `<model>` | `authHeader: bearer`, `ANTHROPIC_API_KEY=""` |
 | `claude-local` | claude | `none` | `http://127.0.0.1:<port>` | `<model>` | `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, `CLAUDE_STREAM_IDLE_TIMEOUT_MS=1800000`, `API_FORCE_IDLE_TIMEOUT=0`, `CLAUDE_CODE_ATTRIBUTION_HEADER=0`; `maxParallel: 1` |
 | `dsh-deepseek` | dsh | `{key: deepseek}` | (`https://api.deepseek.com/anthropic`) | `deepseek-v4-pro`, effort `high` | — |
+| `kimi-code` (0.15.0) | kimi | `{key: kimi-code}` | (`https://api.kimi.ai/coding/v1`, в `config.toml` изолированного каталога) | `k3.1-pro` | ключ в `AGENT_DISPATCH_KIMI_API_KEY` через `api_key_env`; ревьюер — `--agent-file` с `Read`, `Glob`, `Grep` |
 | `opencode-login` | opencode | `login` | — | `<provider/model>` | — |
 | `opencode-key` | opencode | `{key: <name>}` | — | `<provider/model>` | `keyVar: <VAR>` (таблица §3.4) |
 | `opencode-go` | opencode | `{key: opencode-go}` | — | `opencode-go/<model>` | `keyVar: OPENCODE_API_KEY` |
