@@ -329,6 +329,13 @@ VERDICT: GO
 - Config lock: Node has no flock call and Linux has no `O_SHLOCK`/`O_EXLOCK`, so the wrapper opens `<file>.lock` and runs `flock --shared|--exclusive --nonblock 3` with that descriptor as the child's fd 3. flock(2) locks belong to the open file description, so the lock stays held by the wrapper's (and later the CLI's) descriptor after `flock(1)` exits. Exit 1 means another holder (util-linux and busybox alike); any other exit or a missing `flock` is an error. A grandchild spawned by a Node child with three stdio pipes holds only fds 0–2 on Linux too, so ZCode's tool processes do not keep the lock. The lock assumes the state directory is on a local filesystem: on NFS, depending on the mount options, flock(2) locks may be local to one client, so machines sharing one state directory would not see each other's locks. `task` checks for `flock(1)` up front and refuses with exit 2 instead of starting a job that fails in the runner.
 - Not supported: Windows (no flock, no process groups or POSIX signals, ACLs instead of modes) — `doctor` fails `platform`.
 
+## GLM-5.3 as a second pin (0.14.0, 2026-11-01, not checked live)
+
+- `zcode-dispatch task --model GLM-5.3` runs on GLM-5.3 `max` through the same `zai-api` template: its `builtinModelIds` list GLM-5.3 and GLM-5.3-Flash, and the model rule `.*glm-5\.3(?:-flash)?…` gives both the levels `low|high|max` ("CLI login lifetime").
+- The CLI still has no model flag (U1), so each model gets a personal provider config of its own: `personal-provider-config.json` (GLM-5.3-Flash, unchanged) and `personal-provider-config.glm-5.3.json`, both holding the same key rule. One config lock (`personal-provider-config.json.lock`) covers both; `api-key set` / `clear` write both under it, and `api-key sync` copies a stored key into the second file. Runs only read their own model's file.
+- A resume keeps the model of the job it resumes (U1: a session restores its bound selection).
+- Live acceptance pending: `doctor --probe --model GLM-5.3`, then one task; the stream run should name `"modelId":"GLM-5.3"`. An invalid pin would fall back silently (U1), so the probe alone does not prove it.
+
 ## Inputs for later phases
 
 | Key | Value | Evidence |

@@ -1,7 +1,7 @@
 # superpowers-strigov-ver
 
 Personal Claude Code plugin assembled from:
-Current repo/plugin version: `0.13.1`.
+Current repo/plugin version: `0.14.0`.
 
 - **`dev-orchestrator`** — multi-model subagent-driven workflow with a pinned model + effort per role (Opus xhigh plan + Opus high revisions + GPT-6 Astra xhigh plan-review loop + GLM-5.3-Flash max implement via Z.ai's ZCode CLI (`bin/zcode-dispatch`) with GPT-6 Luna max availability fallback and GPT-6.1 Sol xhigh for SECURITY/DATA_LOSS phases and reasoning escalation (channel ladder per phase, `risk_phases` frontmatter map, gate-stall diagnosis) + Sonnet medium verification gate + per-phase fused review: Opus high spec+quality (xhigh on SECURITY/DATA_LOSS phases and in round 4) and Astra high control, both fed a pre-baked review package via `bin/review-package`; file-based implementer reports; Opus high BLOCKED diagnosis; final whole-branch Opus xhigh review before archival, cap=2, Astra xhigh fallback; review synthesis; plan-marked parallel groups run as 2 concurrent tracks in git worktrees; auto-commit, fused loop cap=4 with anti-pingpong / no-progress guards; thread-addressed Codex resume via `--resume-task`; `ultra` effort strictly user-initiated).
 - **`codex-invocation`** — reference recipe for calling Codex via the `bin/codex-dispatch` wrapper around the vendored `codex-companion.mjs` (background mode + Monitor polling; bypasses the silent auto-reject on standard Agent/`codex exec` paths and pins the default model to `gpt-6.1-sol` to block backend auto-downgrade to spark; per-role GPT-6 routing table included).

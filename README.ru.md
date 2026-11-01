@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img alt="Версия 0.13.1" src="https://img.shields.io/badge/version-0.13.1-7c8cff?style=flat-square">
+  <img alt="Версия 0.14.0" src="https://img.shields.io/badge/version-0.14.0-7c8cff?style=flat-square">
   <img alt="Плагин Claude Code" src="https://img.shields.io/badge/Claude_Code-plugin-d97757?style=flat-square">
   <img alt="Лицензия MIT" src="https://img.shields.io/badge/license-MIT-35d6a6?style=flat-square">
 </p>
@@ -38,6 +38,8 @@ codex login
 Codex нужен только встроенной схеме. Если аккаунта OpenAI нет, не ставьте его, но до первого запуска пайплайна назначьте свои профили всем ролям, во встроенной цепочке которых есть профиль Codex (`plan-reviewer`, `spec-reviewer`, `implementer`, `implementer.risk`, `implementer.escalation`, `control-review`, `final-review`, `adhoc-review`): см. [Маршрутизация ролей](#маршрутизация-ролей), пример для тех, у кого нет OpenAI. Тогда `agent-dispatch doctor` покажет неиспользуемые профили Codex как WARN, а не FAIL.
 
 Необязательно — имплементер по умолчанию, **GLM-5.3-Flash через ZCode от Z.ai**: установите [ZCode](https://github.com/zai-org/ZCode) — macOS: ZCode.app в `/Applications`; Linux: см. [Linux: ZCode для канала GLM](#linux-zcode-для-канала-glm) ниже; Windows пока не поддерживается — и один раз сохраните API-ключ GLM Coding Plan со страницы <https://z.ai/manage-apikey/apikey-list>: выполните в терминале `zcode-dispatch api-key set` и вставьте ключ в скрытое приглашение. Ключ станет провайдером собственного шаблона ZCode «Z.ai Coding Plan» в приватном конфиге обёртки и не истекает. OAuth-входа нет: `zcode login` в CLI не хранит refresh-токен и живёт около часа (подробности — в скилле `zcode-invocation`, раздел «One-time setup»). Без ключа `zcode-dispatch doctor` не проходит, и пайплайн реализует фазы на Codex Luna `max` — с объявлением, никогда молча. За локальным прокси экспортируйте `ZCODE_HTTP_PROXY=http://<host>:<port>`, если фоновые запуски падают с сетевой ошибкой (CLI игнорирует `HTTP(S)_PROXY` и системный прокси macOS; обёртка передаёт эту переменную через белый список). CLI получает окружение по белому списку; дополнительные переменные можно явно передать через `ZCODE_ENV_PASSTHROUGH="NAME1,NAME2"`.
+
+Большая **GLM-5.3** работает на том же ключе и том же Coding Plan через встроенный профиль `glm-pro` (`zcode-dispatch task --model GLM-5.3`). По умолчанию на неё ничего не маршрутизируется: впишите её в роль своего `config.json`, например `"implementer": ["glm-pro", "glm", "luna"]`. `api-key set` сохраняет ключ для обеих моделей; ключ, сохранённый до 0.14.0, становится доступен GLM-5.3 командой `zcode-dispatch api-key sync` (ключ вводить не нужно). Проверка: `zcode-dispatch doctor --probe --model GLM-5.3`. Оба профиля тратят одну квоту (`shares: zai-coding-plan`), GLM-5.3 быстрее, чем Flash, и `quota` на одном снимает оба.
 
 #### Linux: ZCode для канала GLM
 

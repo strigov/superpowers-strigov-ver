@@ -209,6 +209,7 @@ export default {
 
 | Профиль | Команда |
 |---|---|
+| `glm-pro` (0.14.0) и любой профиль `zcode` с `model` | то же, что `glm`, плюс `--model <model профиля>` сразу после `--background`. `model` — один из пинов `zcode-dispatch` (`GLM-5.3-Flash`, `GLM-5.3`), `effort` — только `max` или не указан. У каждой модели свой личный конфиг провайдера с тем же ключом; `api-key set`/`clear` пишут оба, `api-key sync` копирует сохранённый ключ. В `status` задача `zt-` относится к первому профилю `zcode`, чья модель совпадает с `model` записи |
 | `glm` | `zcode-dispatch task --background [--cwd W] [--resume-task zt-N \| --fresh] --prompt-file F`. `--write`, `--profile` и `--role` не передаются: `zcode-dispatch` разбирает аргументы строго (`parseArgs({strict: true})`) и ответил бы отказом. Задача без `--write` уходит той же командой и печатает одну строку WARN: у `glm` нет режима только чтения |
 | профили `codex` (`luna`, `sol`, `astra`, `astra-high` и пользовательские) | `codex-dispatch task --background [--write] --model <model профиля> --effort <effort профиля> [--cwd W] [--resume-task task-… \| --fresh] --prompt-file F` |
 | `status`, `result`, `cancel` | по префиксу id: `zt-` → `zcode-dispatch`, `task-` → `codex-dispatch`. stdout, stderr и коды выхода обёрток не меняются |
@@ -447,6 +448,7 @@ state/<ws>/jobs/    задачи ct-, oc-, pi-, dt-
 {
   "profiles": {
     "glm":           { "harness": "zcode", "auth": "native", "shares": "zai-coding-plan", "maxParallel": 2 },
+    "glm-pro":       { "harness": "zcode", "auth": "native", "model": "GLM-5.3", "shares": "zai-coding-plan", "maxParallel": 2 },
     "luna":          { "harness": "codex", "auth": "login", "model": "gpt-6-luna",  "effort": "max" },
     "sol":           { "harness": "codex", "auth": "login", "model": "gpt-6.1-sol", "effort": "xhigh" },
     "astra":         { "harness": "codex", "auth": "login", "model": "gpt-6-astra", "effort": "xhigh" },

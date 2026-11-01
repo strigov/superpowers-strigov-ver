@@ -48,6 +48,31 @@ export const PERSONAL_CONFIG_BASE = {"schemaVersion":1,"config":{"providerConfig
 // ("Z.ai Coding Plan": access zhipu-coding-plan-api-key, https://api.z.ai/api/anthropic, GLM-5.3 and
 // GLM-5.3-Flash), with the provider id ZCode itself derives from that template; PINNED_SELECTION selects it.
 export const PINNED_SELECTION = {"providerId":"zai-api","modelId":"GLM-5.3-Flash","options":{"reasoningLevel":"max"}};
+// The models a task may pin with --model (0.14.0). Both come from the same zai-api template (builtinModelIds GLM-5.3
+// and GLM-5.3-Flash) and take the reasoning levels low|high|max from its model rule `.*glm-5\.3(?:-flash)?…`
+// (docs/zcode-cli-findings.md, "CLI login lifetime"). The CLI has no model flag (U1): each model gets a personal
+// provider config of its own, holding the same key rule and its own selection, so jobs on different models run side
+// by side and no run ever rewrites a file. The default keeps the file name of 0.13.x and earlier.
+export const DEFAULT_MODEL = PINNED_SELECTION.modelId;
+export const MODELS = {
+  "GLM-5.3-Flash": { selection: PINNED_SELECTION, file: "personal-provider-config.json" },
+  "GLM-5.3": { selection: {"providerId":"zai-api","modelId":"GLM-5.3","options":{"reasoningLevel":"max"}}, file: "personal-provider-config.glm-5.3.json" },
+};
+export const MODEL_IDS = Object.keys(MODELS);
+// "<modelId>$<reasoningLevel>", as PINNED_MODEL spells the default.
+export const pinOf = (model) => `${model}$${MODELS[model].selection.options.reasoningLevel}`;
+// A --model value: an id of MODELS, case-insensitive; anything else is refused.
+export function resolveModel(value) {
+  if (value === undefined) return DEFAULT_MODEL;
+  const model = MODEL_IDS.find((id) => id.toLowerCase() === String(value).toLowerCase());
+  if (!model) throw new UsageError(`unknown --model ${JSON.stringify(value)} (models: ${MODEL_IDS.join(", ")})`);
+  return model;
+}
+// The model id of a job record ("GLM-5.3$max" → "GLM-5.3"); records before 0.14.0 hold PINNED_MODEL.
+const modelOfRecord = (record) => {
+  const id = typeof record?.model === "string" ? record.model.split("$")[0] : DEFAULT_MODEL;
+  return MODELS[id] ? id : DEFAULT_MODEL;
+};
 export const API_KEY_TEMPLATE_ID = "zai-api";
 export const API_KEY_PROVIDER_ID = "zai-api";
 export const API_KEY_ACCESS_TYPE = "zhipu-coding-plan-api-key";
@@ -134,7 +159,7 @@ function stateRoot(env = process.env) {
   return env.ZCODE_STATE_DIR || path.join(os.homedir(), ".claude", "plugins", "data", "superpowers-strigov-ver-zcode");
 }
 
-const personalConfigFile = (env = process.env) => path.join(stateRoot(env), "personal-provider-config.json");
+const personalConfigFile = (model = DEFAULT_MODEL, env = process.env) => path.join(stateRoot(env), MODELS[model].file);
 
 // The CLI's own home for its credentials and state, apart from the user's ~/.zcode, whose credential
 // key the desktop app rewrites with a different token kind (docs/zcode-cli-findings.md, "CLI data home").
@@ -437,7 +462,7 @@ export const hasApiKey = (config) => Boolean(apiKeyRuleOf(config));
 // Structural, independent of key order (a reformatted file still pins the same selection).
 const canonical = (value) =>
   Array.isArray(value) ? value.map(canonical) : isObject(value) ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])])) : value;
-export const isPinned = (config) => JSON.stringify(canonical(pick(config, SELECTION_PATH))) === JSON.stringify(canonical(PINNED_SELECTION));
+export const isPinned = (config, model = DEFAULT_MODEL) => JSON.stringify(canonical(pick(config, SELECTION_PATH))) === JSON.stringify(canonical(MODELS[model].selection));
 
 // A failed write removes its temp copy (it may hold the key); after a successful rename the name is gone.
 function writePrivateJson(file, value) {
@@ -537,22 +562,37 @@ function openConfigLock(kind, waitMs) {
   return null;
 }
 
-// Replaces (apiKey given) or removes (null) the API-key rule, keeps every other rule, pins PINNED_SELECTION.
-// Under the exclusive config lock, so it is refused while a run holds the shared one. The rule is written in
-// the CLI's canonical shape (providers.toJSON order), so the CLI keeps the file as is.
-export function setApiKeyRule(file, apiKey) {
+// Replaces (apiKey given) or removes (null) the API-key rule in the personal config of every model of MODELS, keeps
+// every other rule, pins each file's own selection. With apiKey undefined (`api-key sync`) it copies the key stored
+// for the default model into the others. Under the exclusive config lock (one lock for all the files), so it is
+// refused while a run holds the shared one. The rule is written in the CLI's canonical shape (providers.toJSON
+// order), so the CLI keeps the file as is. Returns the default model's config.
+export function setApiKeyRule(apiKey) {
   const lockFd = openConfigLock(LOCK_EXCLUSIVE, 2_000);
   if (lockFd === null) {
     throw new UsageError(`a GLM run (task or probe — its runner or CLI) still holds ${configLockFile()} (see: lsof ${configLockFile()}); store or clear the key after it ends, or cancel the task; nothing changed`);
   }
   try {
-    return writeApiKeyRule(file, apiKey);
+    let key = apiKey;
+    if (key === undefined) {
+      const rule = apiKeyRuleOf(readPersonalConfig(personalConfigFile()));
+      if (!rule) throw new UsageError(`no Coding Plan API key in ${personalConfigFile()} to copy; the user stores one: zcode-dispatch api-key set (keys: ${API_KEY_MANAGEMENT_URL}); nothing changed`);
+      key = rule.config.access.apiKey;
+    }
+    // Read every file first: one that cannot be read (it may hold a key) stops the command before any write.
+    for (const model of MODEL_IDS) readPersonalConfig(personalConfigFile(model));
+    let first = null;
+    for (const model of MODEL_IDS) {
+      const config = writeApiKeyRule(personalConfigFile(model), key, MODELS[model].selection);
+      first ??= config;
+    }
+    return first;
   } finally {
     fs.closeSync(lockFd);
   }
 }
 
-function writeApiKeyRule(file, apiKey) {
+function writeApiKeyRule(file, apiKey, selection) {
   const config = readPersonalConfig(file);
   if (!isObject(config.config)) config.config = {};
   if (!isObject(config.config.providerConfigRules)) config.config.providerConfigRules = {};
@@ -567,7 +607,7 @@ function writeApiKeyRule(file, apiKey) {
     if (!isObject(node[key])) node[key] = {};
     node = node[key];
   }
-  node[keys.at(-1)] = structuredClone(PINNED_SELECTION);
+  node[keys.at(-1)] = structuredClone(selection);
   sweepTempCopies(file);
   writePrivateJson(file, config);
   return config;
@@ -946,14 +986,14 @@ export function buildCliArgv({ bin, prompt, workspaceRoot, sessionId }) {
   return argv;
 }
 
-function buildCliEnv(paths, appVersion) {
+function buildCliEnv(paths, appVersion, model) {
   const env = {
     ...filterCliEnv(process.env),
     ...MODEL_ENV,
     ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: paths.providerConfig,
     ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE: paths.providerConfig,
     ZCODE_APP_VERSION: appVersion,
-    ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalConfigFile(),
+    ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalConfigFile(model),
     ...cliHomeEnv(),
   };
   // The CLI also reads ZCODE_SESSION_DB as an alias of ZCODE_SESSION_DB_PATH; an inherited one could win.
@@ -1103,8 +1143,8 @@ function reportedModelOf(json) {
   return typeof value === "string" ? value : null;
 }
 
-function reportedMatchesPin(reported) {
-  const [pinnedId, pinnedLevel] = PINNED_MODEL.split("$");
+function reportedMatchesPin(reported, model) {
+  const [pinnedId, pinnedLevel] = pinOf(model).split("$");
   const [id, level] = reported.slice(reported.lastIndexOf("/") + 1).split("$");
   return id === pinnedId && (level === undefined || level === pinnedLevel);
 }
@@ -1140,7 +1180,7 @@ function checkPromptFile(value) {
   return file;
 }
 
-function resolveResume(jobsDir, ref) {
+function resolveResume(jobsDir, ref, requestedModel) {
   if (!ID_RE.test(ref)) throw new UsageError(`${ref} is not a zcode-dispatch job id (zt-NNNN); Codex task- ids belong to codex-dispatch`);
   const record = readRecord(jobFile(jobsDir, ref));
   if (!record) throw new UsageError(`unknown job ${ref} in this workspace (pass the same --cwd as the original task)`);
@@ -1148,7 +1188,10 @@ function resolveResume(jobsDir, ref) {
   if (record.status !== "completed" || !record.sessionId) throw new UsageError(`job ${ref} is ${record.status} / has no session; dispatch --fresh`);
   // A resumed session keeps the provider it started on; one from before 0.10.0 ran on the OAuth account provider.
   if (record.provider !== PINNED_SELECTION.providerId) throw new UsageError(`job ${ref} ran on ${record.provider ?? "the OAuth account provider"}, not ${PINNED_SELECTION.providerId}; its session cannot move to the API key; dispatch --fresh`);
-  return { resumeOf: ref, sessionId: record.sessionId };
+  // A session keeps the model it started on (U1): a resume runs on that model; an explicit other --model is refused.
+  const model = modelOfRecord(record);
+  if (requestedModel !== undefined && requestedModel !== model) throw new UsageError(`job ${ref} ran on ${model}, not ${requestedModel}; a session keeps its model; dispatch --fresh`);
+  return { resumeOf: ref, sessionId: record.sessionId, model };
 }
 
 async function cmdTask(args) {
@@ -1160,10 +1203,12 @@ async function cmdTask(args) {
       "resume-task": { type: "string" },
       fresh: { type: "boolean" },
       "prompt-file": { type: "string" },
+      model: { type: "string" },
     },
     0,
   );
   if (!values.background) throw new UsageError("task requires --background (there is no foreground mode)");
+  const requestedModel = values.model !== undefined ? resolveModel(values.model) : undefined;
   if (values["resume-task"] !== undefined && values.fresh) throw new UsageError("--resume-task and --fresh are mutually exclusive");
   if (process.env.SP_IMPLEMENTER === "luna") throw new UsageError("SP_IMPLEMENTER=luna is set: the GLM channel is switched off (kill switch)");
   passthroughNames(); // refuse invalid names before any job or reservation state is written
@@ -1177,17 +1222,19 @@ async function cmdTask(args) {
   if (!appVersion) throw new UsageError(`cannot read ${paths.version.label}; refusing to run with an unknown client version`);
   if (!fs.existsSync(paths.bin)) throw new UsageError(`ZCode CLI not found: ${paths.bin}`);
   if (!fs.existsSync(paths.providerConfig)) throw new UsageError(`ZCode provider config not found: ${paths.providerConfig}`);
+  const resume = values["resume-task"] !== undefined ? resolveResume(ws.jobsDir, values["resume-task"], requestedModel) : { resumeOf: null, sessionId: null, model: requestedModel ?? DEFAULT_MODEL };
+  const model = resume.model;
+  const pcfg = personalConfigFile(model);
   let configured;
   try {
-    configured = readPersonalConfig(personalConfigFile());
+    configured = readPersonalConfig(pcfg);
   } catch (error) {
     throw new UsageError(error.message);
   }
-  if (!hasApiKey(configured)) throw new UsageError(`no Coding Plan API key is configured in ${personalConfigFile()}; the user stores one: zcode-dispatch api-key set (keys: ${API_KEY_MANAGEMENT_URL})`);
-  if (!isPinned(configured)) throw new UsageError(`${personalConfigFile()} does not pin ${PINNED_MODEL} via ${PINNED_SELECTION.providerId}; the user re-pins it: zcode-dispatch api-key set`);
+  if (!hasApiKey(configured)) throw new UsageError(`no Coding Plan API key is configured in ${pcfg}; the user stores one: zcode-dispatch api-key set (keys: ${API_KEY_MANAGEMENT_URL})${model !== DEFAULT_MODEL ? `, or copies the stored one to ${model}: zcode-dispatch api-key sync` : ""}`);
+  if (!isPinned(configured, model)) throw new UsageError(`${pcfg} does not pin ${pinOf(model)} via ${PINNED_SELECTION.providerId}; the user re-pins it: zcode-dispatch api-key ${model !== DEFAULT_MODEL ? "sync" : "set"}`);
   const templateProblem = apiKeyTemplateProblem(paths.providerConfig);
   if (templateProblem) throw new UsageError(`a Coding Plan API key is configured, but ${templateProblem}`);
-  const resume = values["resume-task"] !== undefined ? resolveResume(ws.jobsDir, values["resume-task"]) : { resumeOf: null, sessionId: null };
   const timeoutMin = readTimeoutMin();
   const id = nextJobId(ws.jobsDir);
   const reservation = acquireReservation(ws.jobsDir, id, ws.root);
@@ -1203,7 +1250,7 @@ async function cmdTask(args) {
       resumeOf: resume.resumeOf,
       workspaceRoot: ws.root,
       promptFile,
-      model: PINNED_MODEL,
+      model: pinOf(model),
       provider: PINNED_SELECTION.providerId,
       reportedModel: null,
       appVersion,
@@ -1268,12 +1315,14 @@ async function runJob(id, jobsDir, token) {
       finalizeRecord(file, { status: "failed", errorClass: "launch", note: `cannot read prompt file: ${error.message}` });
       return 1;
     }
+    const model = modelOfRecord(record);
+    const pcfg = personalConfigFile(model);
     let pinned;
     try {
       configLockFd = openConfigLock(LOCK_SHARED, 10_000);
       if (configLockFd === null) throw new Error("an api-key command holds the config lock; retry");
-      securePersonalConfig(personalConfigFile());
-      pinned = readPersonalConfig(personalConfigFile());
+      securePersonalConfig(pcfg);
+      pinned = readPersonalConfig(pcfg);
     } catch (error) {
       finalizeRecord(file, { status: "failed", errorClass: "launch", note: `cannot read the personal provider config: ${error.message}` });
       return 1;
@@ -1283,8 +1332,8 @@ async function runJob(id, jobsDir, token) {
       finalizeRecord(file, { status: "failed", errorClass: "auth", note: "no Coding Plan API key in the personal provider config (cleared after the task was queued?); the user stores one: zcode-dispatch api-key set" });
       return 1;
     }
-    if (!isPinned(pinned)) {
-      finalizeRecord(file, { status: "failed", errorClass: "model-not-selected", note: `the personal provider config does not pin ${PINNED_MODEL} via ${PINNED_SELECTION.providerId}; the user re-pins it: zcode-dispatch api-key set` });
+    if (!isPinned(pinned, model)) {
+      finalizeRecord(file, { status: "failed", errorClass: "model-not-selected", note: `the personal provider config ${pcfg} does not pin ${pinOf(model)} via ${PINNED_SELECTION.providerId}; the user re-pins it: zcode-dispatch api-key ${model !== DEFAULT_MODEL ? "sync" : "set"}` });
       return 1;
     }
     try {
@@ -1296,7 +1345,7 @@ async function runJob(id, jobsDir, token) {
     const paths = zcodePaths();
     let env;
     try {
-      env = buildCliEnv(paths, record.appVersion);
+      env = buildCliEnv(paths, record.appVersion, model);
     } catch (error) {
       finalizeRecord(file, { status: "failed", errorClass: "launch", note: error.message });
       return 1;
@@ -1304,7 +1353,7 @@ async function runJob(id, jobsDir, token) {
     const argv = buildCliArgv({ bin: paths.bin, prompt, workspaceRoot: record.workspaceRoot, sessionId: record.resumeOf ? record.sessionId : null });
     appendLog(log, `start ${id}: ${JSON.stringify(paths.node)} ${summarizeArgv(argv)}`);
     appendLog(log, describeCliEnv(env));
-    const redact = keyRedactor(personalConfigFile(), pinned);
+    const redact = keyRedactor(pcfg, pinned);
     const result = await runCli({
       node: paths.node,
       argv,
@@ -1410,7 +1459,8 @@ async function cmdCancel(args) {
 }
 
 async function cmdDoctor(args) {
-  const { values } = parse(args, { cwd: { type: "string" }, probe: { type: "boolean" } }, 0);
+  const { values } = parse(args, { cwd: { type: "string" }, probe: { type: "boolean" }, model: { type: "string" } }, 0);
+  const probeModel = resolveModel(values.model);
   const cwd = path.resolve(values.cwd ?? process.cwd());
   const paths = zcodePaths();
   const lines = [];
@@ -1467,6 +1517,22 @@ async function cmdDoctor(args) {
   } catch (error) {
     report("FAIL", "personal-config", `cannot read ${personalConfigFile()}: ${error.message}`);
   }
+  // Every other model: WARN while it is not set up (the default model still runs), FAIL when --model names it.
+  for (const model of MODEL_IDS.filter((id) => id !== DEFAULT_MODEL)) {
+    const file = personalConfigFile(model);
+    const level = model === probeModel ? "FAIL" : "WARN";
+    const check = `personal-config ${model}`;
+    try {
+      securePersonalConfig(file);
+      const current = fs.existsSync(file) ? readPersonalConfig(file) : null;
+      if (!current) report(level, check, `${file} does not exist: --model ${model} is not set up; the user copies the stored key to it: zcode-dispatch api-key sync`);
+      else if (!hasApiKey(current)) report(level, check, `no Coding Plan API key in ${file}; the user copies the stored one: zcode-dispatch api-key sync`);
+      else if (!isPinned(current, model)) report(level, check, `${file} does not pin ${pinOf(model)} via ${PINNED_SELECTION.providerId}; the user re-pins it: zcode-dispatch api-key sync`);
+      else report("ok", check, `${file} pins ${pinOf(model)} via ${PINNED_SELECTION.providerId}`);
+    } catch (error) {
+      report(level, check, `cannot read ${file}: ${error.message}`);
+    }
+  }
   if (keyed === true) {
     const problem = apiKeyTemplateProblem(paths.providerConfig);
     if (problem) report("FAIL", "auth", `ZCode template incompatible: a Coding Plan API key is stored, but ${problem}; a new key does not help — the wrapper needs an update for this ZCode`);
@@ -1491,29 +1557,30 @@ async function cmdDoctor(args) {
   process.stdout.write(`${lines.join("\n")}\ndoctor: ${failed ? "FAIL" : "ok"}\n`);
   if (failed) return 1;
   if (!values.probe) return 0;
-  return await runProbe(paths, appVersion, ws.root);
+  return await runProbe(paths, appVersion, ws.root, probeModel);
 }
 
 // One synchronous PONG request: the only diagnostic that spends quota.
-async function runProbe(paths, appVersion, root) {
+async function runProbe(paths, appVersion, root, model) {
   const configLockFd = openConfigLock(LOCK_SHARED, 10_000);
   if (configLockFd === null) throw new Error("an api-key command holds the config lock; retry doctor --probe");
   try {
-    return await probeWithLock(paths, appVersion, root, configLockFd);
+    return await probeWithLock(paths, appVersion, root, configLockFd, model);
   } finally {
     fs.closeSync(configLockFd);
   }
 }
 
-async function probeWithLock(paths, appVersion, root, configLockFd) {
-  securePersonalConfig(personalConfigFile());
-  const pinned = readPersonalConfig(personalConfigFile());
+async function probeWithLock(paths, appVersion, root, configLockFd, model) {
+  const pcfg = personalConfigFile(model);
+  securePersonalConfig(pcfg);
+  const pinned = readPersonalConfig(pcfg);
   // Under the shared lock the file cannot change before the CLI reads it, but an api-key clear may have run
   // since the offline checks: without the key or the pin the CLI would fall back to another model.
-  const missing = !hasApiKey(pinned) ? "auth" : !isPinned(pinned) ? "model-not-selected" : null;
+  const missing = !hasApiKey(pinned) ? "auth" : !isPinned(pinned, model) ? "model-not-selected" : null;
   if (missing) {
     process.stdout.write(`model-selected: FAIL(${missing})\nanswers: FAIL\nreported-model: unreported\nusage: input=- cached=- output=-\nprobe: FAIL\n`);
-    process.stderr.write(`hint: ${missing === "auth" ? "no Coding Plan API key is stored" : `the personal provider config does not pin ${PINNED_MODEL}`}; the user runs: zcode-dispatch api-key set (keys: ${API_KEY_MANAGEMENT_URL})\n`);
+    process.stderr.write(`hint: ${missing === "auth" ? "no Coding Plan API key is stored" : `the personal provider config does not pin ${pinOf(model)}`}; the user runs: zcode-dispatch api-key ${model !== DEFAULT_MODEL ? "sync" : `set (keys: ${API_KEY_MANAGEMENT_URL})`}\n`);
     return 1;
   }
   ensureCliHome();
@@ -1522,11 +1589,11 @@ async function probeWithLock(paths, appVersion, root, configLockFd) {
     node: paths.node,
     argv,
     cwd: root,
-    env: buildCliEnv(paths, appVersion),
+    env: buildCliEnv(paths, appVersion, model),
     stdinText: PROMPT_TRANSPORT === "stdin" ? PROBE_PROMPT : null,
     timeoutMs: PROBE_TIMEOUT_MS,
     logPath: null,
-    redact: keyRedactor(personalConfigFile(), pinned),
+    redact: keyRedactor(pcfg, pinned),
     extraFds: [configLockFd],
   });
   const verdict = evaluate(result);
@@ -1534,7 +1601,7 @@ async function probeWithLock(paths, appVersion, root, configLockFd) {
   const modelSelected = verdict.status === "completed";
   const answers = modelSelected && json.response.includes("PONG");
   const reported = json ? reportedModelOf(json) : null;
-  const modelMatches = reported === null || reportedMatchesPin(reported);
+  const modelMatches = reported === null || reportedMatchesPin(reported, model);
   const usage = json?.usage ?? {};
   const count = (field) => {
     const value = field ? pick(usage, field) : undefined;
@@ -1543,7 +1610,7 @@ async function probeWithLock(paths, appVersion, root, configLockFd) {
   const ok = modelSelected && answers && modelMatches;
   process.stdout.write(
     [
-      `model-selected: ${modelSelected ? "ok" : `FAIL(${verdict.errorClass})`}`,
+      `model-selected: ${modelSelected ? `ok (${pinOf(model)})` : `FAIL(${verdict.errorClass})`}`,
       `answers: ${answers ? "ok" : "FAIL"}`,
       `reported-model: ${reported ?? "unreported"}`,
       `usage: input=${count(USAGE_FIELDS.input)} cached=${count(USAGE_FIELDS.cached)} output=${count(USAGE_FIELDS.output)}`,
@@ -1553,7 +1620,7 @@ async function probeWithLock(paths, appVersion, root, configLockFd) {
   if (!modelSelected && result.stderrTail.trim()) process.stderr.write(`${result.stderrTail.split("\n").slice(-20).join("\n")}\n`);
   if (verdict.errorClass === "auth" || verdict.errorClass === "model-not-selected") {
     process.stderr.write(
-      `hint: the ZCode CLI could not use the Coding Plan API key in ${personalConfigFile()} (revoked, mistyped, its plan has no GLM access, or this ZCode version treats the zai-api template differently); store a valid one: zcode-dispatch api-key set (keys: ${API_KEY_MANAGEMENT_URL})\n`,
+      `hint: the ZCode CLI could not use the Coding Plan API key in ${pcfg} (revoked, mistyped, its plan has no GLM access, or this ZCode version treats the zai-api template differently); store a valid one: zcode-dispatch api-key set (keys: ${API_KEY_MANAGEMENT_URL})\n`,
     );
   }
   return ok ? 0 : 1;
@@ -1606,13 +1673,22 @@ async function cmdApiKey(args) {
   // Arguments are never echoed: a key typed as an argument must not reach stderr (parse() would print it).
   const [action, ...rest] = args;
   if (action === "set" && rest.length > 0) throw new UsageError("api-key set takes the key on stdin, never as an argument (e.g. pbpaste | zcode-dispatch api-key set, or xclip -o -selection clipboard | … on Linux); nothing stored");
+  const files = MODEL_IDS.map((model) => personalConfigFile(model)).join(", ");
   if (action === "clear") {
     if (rest.length > 0) throw new UsageError("usage: zcode-dispatch api-key clear (no arguments)");
-    setApiKeyRule(personalConfigFile(), null);
-    process.stdout.write(`api-key: cleared from ${personalConfigFile()}; the GLM channel is off until a key is stored again (zcode-dispatch api-key set)\n`);
+    setApiKeyRule(null);
+    process.stdout.write(`api-key: cleared from ${files}; the GLM channel is off until a key is stored again (zcode-dispatch api-key set)\n`);
     return 0;
   }
-  if (action !== "set") throw new UsageError("usage: zcode-dispatch api-key <set|clear> (set reads the key on stdin)");
+  if (action === "sync") {
+    if (rest.length > 0) throw new UsageError("usage: zcode-dispatch api-key sync (no arguments; copies the stored key to every model)");
+    const problem = apiKeyTemplateProblem(zcodePaths().providerConfig);
+    if (problem) throw new UsageError(`cannot use a Coding Plan API key with this ZCode: ${problem}`);
+    setApiKeyRule(undefined);
+    process.stdout.write(`api-key: the stored key now also serves ${MODEL_IDS.filter((id) => id !== DEFAULT_MODEL).join(", ")}; files ${files} (mode 0600), each pinned to its model (${MODEL_IDS.map(pinOf).join(", ")}); check one with: zcode-dispatch doctor --probe --model <id>\n`);
+    return 0;
+  }
+  if (action !== "set") throw new UsageError("usage: zcode-dispatch api-key <set|sync|clear> (set reads the key on stdin)");
   const paths = zcodePaths();
   const problem = apiKeyTemplateProblem(paths.providerConfig);
   if (problem) throw new UsageError(`cannot use a Coding Plan API key with this ZCode: ${problem}`);
@@ -1627,9 +1703,9 @@ async function cmdApiKey(args) {
       `stdin is not one API key: got ${key.length} characters on ${lines} line(s), ${spaces} space(s), ${other} other character(s) outside A–Z a–z 0–9 . _ - (expected 8–${API_KEY_MAX} of those on one line); nothing stored. If the clipboard held this command rather than the key, run "zcode-dispatch api-key set" without a pipe and paste the key at the hidden prompt`,
     );
   }
-  setApiKeyRule(personalConfigFile(), key);
+  setApiKeyRule(key);
   process.stdout.write(
-    `api-key: stored in ${personalConfigFile()} (mode 0600) as provider ${API_KEY_PROVIDER_ID} from ZCode's template ${API_KEY_TEMPLATE_ID}; pinned to ${PINNED_MODEL}; check it with: zcode-dispatch doctor --probe\n`,
+    `api-key: stored in ${personalConfigFile()} (mode 0600) as provider ${API_KEY_PROVIDER_ID} from ZCode's template ${API_KEY_TEMPLATE_ID}; pinned to ${PINNED_MODEL}; also in ${MODEL_IDS.filter((id) => id !== DEFAULT_MODEL).map((id) => `${personalConfigFile(id)} (${pinOf(id)})`).join(", ")}; check it with: zcode-dispatch doctor --probe\n`,
   );
   return 0;
 }

@@ -242,6 +242,8 @@ export function checkProfile(name, raw) {
   if (raw.maxParallel !== undefined && !(Number.isInteger(raw.maxParallel) && raw.maxParallel > 0)) problem(`${at}: maxParallel must be a positive integer`);
   if (harness === "inproc" && (raw.model === undefined || raw.effort === undefined)) problem(`${at}: an inproc profile needs model and effort (the Agent tool's model and effort)`);
   if (harness === "codex" && (raw.model === undefined || raw.effort === undefined)) problem(`${at}: a codex profile needs model and effort (they go to codex-dispatch as --model and --effort)`);
+  if (harness === "zcode" && raw.model !== undefined && !zcodeAdapter.models.includes(raw.model)) problem(`${at}: model must be one of the models zcode-dispatch pins (${zcodeAdapter.models.join(", ")}); without it the default ${zcodeAdapter.pinned.model}`);
+  if (harness === "zcode" && raw.effort !== undefined && raw.effort !== zcodeAdapter.pinned.effort) problem(`${at}: effort must be "${zcodeAdapter.pinned.effort}" (zcode-dispatch pins every model at that reasoning level) or left out`);
   if ((harness === "opencode" || harness === "pi") && authMode(raw.auth) === "key" && raw.keyVar === undefined) {
     problem(`${at}: a ${harness} profile with a key needs keyVar (the variable the harness reads the key from)`);
   }
@@ -470,7 +472,7 @@ function parseSkips(values) {
 
 function shownModel(profile) {
   const pass = PASS_THROUGH[profile.harness];
-  return { model: pass?.pinned?.model ?? profile.model ?? "-", effort: pass?.pinned?.effort ?? profile.effort ?? "-" };
+  return { model: (pass?.modelOf ? pass.modelOf(profile) : pass?.pinned?.model) ?? profile.model ?? "-", effort: pass?.pinned?.effort ?? profile.effort ?? "-" };
 }
 
 export function routeRole(state, role, skips = [], links = linkedProfiles(state)) {
@@ -681,8 +683,9 @@ function queryStore(pass, state, { cwd, all = false, allSessions = false } = {})
     return { error: `${pass.wrapper.name} status --json printed no JSON` };
   }
   const zcodeName = [...state.profiles.values()].find((entry) => entry.p.harness === "zcode")?.name ?? "glm";
+  const zcodeProfiles = [...state.profiles.values()].filter((entry) => entry.p.harness === "zcode").map((entry) => ({ name: entry.name, model: zcodeAdapter.modelOf(entry.p) }));
   const profiles = [...state.profiles.values()].filter((entry) => entry.p.harness === "codex").map((entry) => ({ name: entry.name, model: entry.p.model, effort: entry.p.effort }));
-  return { jobs: pass.statusJobs(data, { profileName: zcodeName, profiles }) };
+  return { jobs: pass.statusJobs(data, { profileName: zcodeName, zcodeProfiles, profiles }) };
 }
 
 // spec §3.9: before a write task, the stores other than the task's own must hold no running write job in the same
@@ -1446,7 +1449,9 @@ async function doctorProfile(state, name, report, checks) {
     const file = wrapperPath(pass);
     if (!isExecutable(file)) report("FAIL", `profile ${name}`, `${pass.wrapper.name} not found or not executable: ${file}`);
     else if (p.harness === "zcode") {
-      report("ok", `profile ${name}`, `pass-through to ${file} (${pass.pinned.model} ${pass.pinned.effort}, pinned by the wrapper)${single ? `; check the GLM channel itself with: ${pass.wrapper.name} doctor --probe` : ""}`);
+      const model = pass.modelOf(p);
+      const flag = p.model !== undefined ? ` --model ${p.model}` : "";
+      report("ok", `profile ${name}`, `pass-through to ${file} (${model} ${pass.pinned.effort}, pinned by the wrapper${flag ? `; task gets${flag}` : ""})${single ? `; check the GLM channel itself with: ${pass.wrapper.name} doctor --probe${flag}` : ""}`);
     } else {
       report("ok", `profile ${name}`, `pass-through to ${file} (--model ${p.model} --effort ${p.effort}; the model is not checked)`);
       checkCodex(name, report, checks);

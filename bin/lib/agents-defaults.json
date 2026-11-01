@@ -2,6 +2,7 @@
   "version": 1,
   "profiles": {
     "glm":           { "harness": "zcode", "auth": "native", "shares": "zai-coding-plan", "maxParallel": 2 },
+    "glm-pro":       { "harness": "zcode", "auth": "native", "model": "GLM-5.3", "shares": "zai-coding-plan", "maxParallel": 2 },
     "luna":          { "harness": "codex", "auth": "login", "model": "gpt-6-luna",  "effort": "max" },
     "sol":           { "harness": "codex", "auth": "login", "model": "gpt-6.1-sol", "effort": "xhigh" },
     "astra":         { "harness": "codex", "auth": "login", "model": "gpt-6-astra", "effort": "xhigh" },

@@ -15,7 +15,7 @@ disable-model-invocation: true
 `bin/agent-dispatch` runs the profile a pipeline role is bound to. A **profile** is a harness, a way to pay (the harness's own login or an API key), a model, an effort and options. A **role** (`implementer`, `plan-reviewer`, …) has a **chain** of profiles: the first is the primary, the rest are fallbacks in order. The **channel** is the profile currently running a role.
 
 - The user's profiles and roles live in `~/.claude/plugins/data/superpowers-strigov-ver-agents/config.json` (no secrets; keys sit in `keys/<name>`, mode 0600). **No file → the built-in scheme**, which is the dev-orchestrator Model split table, unchanged. A role in the file replaces that role's built-in chain; every other role stays built-in.
-- Built-in profiles: `glm` (harness `zcode`, GLM-5.3-Flash `max`), `luna` (`codex`, `gpt-6-luna` `max`), `sol` (`codex`, `gpt-6.1-sol` `xhigh`), `astra` (`codex`, `gpt-6-astra` `xhigh`), `astra-high` (`codex`, `gpt-6-astra` `high`), `opus-xhigh`, `opus-high`, `sonnet-medium` (harness `inproc`). They cannot be redefined.
+- Built-in profiles: `glm` (harness `zcode`, GLM-5.3-Flash `max`), `glm-pro` (`zcode`, GLM-5.3 `max`, the same Coding Plan: `shares: zai-coding-plan`; in no built-in chain), `luna` (`codex`, `gpt-6-luna` `max`), `sol` (`codex`, `gpt-6.1-sol` `xhigh`), `astra` (`codex`, `gpt-6-astra` `xhigh`), `astra-high` (`codex`, `gpt-6-astra` `high`), `opus-xhigh`, `opus-high`, `sonnet-medium` (harness `inproc`). They cannot be redefined.
 - `zcode` and `codex` profiles are **passed through** to `zcode-dispatch` / `codex-dispatch`: the same argv, the same `zt-…` / `task-…` ids, job stores, refusals and exit codes. Core harnesses run as background jobs of `agent-dispatch` itself, with ids `ct-NNNN` (claude), `oc-NNNN` (opencode), `pi-NNNN` (pi), `dt-NNNN` (dsh). `inproc` profiles are Claude subagents of the session (Agent tool); `task` refuses them (exit 2).
 - Profiles, keys, logins and `config.json` belong to the user. The orchestrator never edits `config.json`, never runs `key set`, `profile add` or a harness login, never asks for a key in the chat, and never runs `doctor --probe` (one paid request) unless the user asks for it.
 
@@ -59,7 +59,7 @@ The same idiom as `$DISPATCH` (`codex-invocation`) and `$ZDISPATCH` (`zcode-invo
 | `harness=` | Command | Poll · result · cancel |
 |---|---|---|
 | `inproc` | `Agent(subagent_type="general-purpose", model=<model>, effort=<effort>, ...)` | Agent completion |
-| `zcode` | `"$ZDISPATCH" task --background [--cwd W] [--resume-task zt-N \| --fresh] --prompt-file F` — no model flags (`zcode-invocation`) | `$ZDISPATCH` |
+| `zcode` | `"$ZDISPATCH" task --background [--model GLM-5.3] [--cwd W] [--resume-task zt-N \| --fresh] --prompt-file F` — `--model GLM-5.3` when the route line says `model=GLM-5.3` (`glm-pro`), no model flag for `glm` (`zcode-invocation`) | `$ZDISPATCH` |
 | `codex` | `"$DISPATCH" task --background [--write] --model <model> --effort <effort> [--cwd W] [--resume-task task-… \| --fresh] --prompt-file F` (`codex-invocation`) | `$DISPATCH` |
 | `claude`, `opencode`, `pi`, `dsh` | `"$AD" task --profile <profile> --role <role> --background [--write] [--cwd W] [--resume-task <id> \| --fresh] --prompt-file F` | `$AD` |
 

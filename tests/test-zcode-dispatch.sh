@@ -1150,6 +1150,78 @@ process.exit(!inEnv && !inArgv && rule?.config?.access?.apiKey === process.env.K
         echo "    status: $st log: $key_log"
     fi
 
+    # --- 15b. --model GLM-5.3: a personal config of its own, written by api-key set / sync, chosen per task ---
+    local pcfg53="$ZCODE_STATE_DIR/personal-provider-config.glm-5.3.json" id53 m53_err
+    if [[ -f "$pcfg53" && "$(mode_of "$pcfg53")" == 600 ]] && PCFG="$pcfg53" SEL_PATH="$sel_path" KEY="$fake_key" node -e '
+const fs = require("node:fs");
+const o = JSON.parse(fs.readFileSync(process.env.PCFG, "utf8"));
+const at = (x) => process.env.SEL_PATH.split(".").reduce((a, k) => (a == null ? undefined : a[k]), x);
+const rule = o.config.providerConfigRules.providerRules.find((x) => x.providerId === "zai-api");
+process.exit(rule?.config?.access?.apiKey === process.env.KEY
+  && JSON.stringify(at(o)) === JSON.stringify({ providerId: "zai-api", modelId: "GLM-5.3", options: { reasoningLevel: "max" } }) ? 0 : 1);' \
+        && [[ "$("$ZD" doctor)" == *"ok personal-config GLM-5.3: $pcfg53 pins GLM-5.3\$max via zai-api"* ]]; then
+        pass "15b api-key set also writes <state root>/personal-provider-config.glm-5.3.json (0600): the same key rule, pinned to GLM-5.3 max; doctor ok personal-config GLM-5.3"
+    else
+        fail "15b api-key set also writes <state root>/personal-provider-config.glm-5.3.json (0600): the same key rule, pinned to GLM-5.3 max; doctor ok personal-config GLM-5.3"
+        echo "    file: $(head -c 400 "$pcfg53" 2>/dev/null)"
+    fi
+
+    export ZCODE_STUB_MODE=record ZCODE_STUB_RECORD="$TEST_ROOT/m53-record.json"
+    id53="$(start_task --model glm-5.3 --prompt-file "$prompt")"
+    st="$(wait_status "$id53" 'completed|failed|cancelled' 20)"
+    unset ZCODE_STUB_RECORD
+    export ZCODE_STUB_MODE=ok
+    if [[ "$st" == completed && "$("$ZD" status "$id53" --json | jfield job.model)" == 'GLM-5.3$max' ]] \
+        && [[ "$("$ZD" status --cwd "$repo")" == *"$id53 "*"GLM-5.3\$max"* ]] \
+        && REC="$TEST_ROOT/m53-record.json" PCFG="$pcfg53" SEL_PATH="$sel_path" node -e '
+const fs = require("node:fs");
+const r = JSON.parse(fs.readFileSync(process.env.REC, "utf8"));
+const at = (x) => process.env.SEL_PATH.split(".").reduce((a, k) => (a == null ? undefined : a[k]), x);
+process.exit(r.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE === process.env.PCFG && at(r.personalConfig)?.modelId === "GLM-5.3" ? 0 : 1);'; then
+        pass "15b task --model glm-5.3 (any case): the CLI gets the GLM-5.3 personal config; the record and status say GLM-5.3\$max"
+    else
+        fail "15b task --model glm-5.3 (any case): the CLI gets the GLM-5.3 personal config; the record and status say GLM-5.3\$max"
+        echo "    status: $st record: $(head -c 400 "$TEST_ROOT/m53-record.json" 2>/dev/null)"
+    fi
+    expect_exit 2 "15b task --model GLM-9 is refused (exit 2)" "$ZD" task --background --model GLM-9 --prompt-file "$prompt"
+    export ZCODE_STUB_MODE=record ZCODE_STUB_RECORD="$TEST_ROOT/m53-resume.json"
+    id="$(start_task --resume-task "$id53" --prompt-file "$prompt")"
+    st="$(wait_status "$id" 'completed|failed|cancelled' 20)"
+    unset ZCODE_STUB_RECORD
+    export ZCODE_STUB_MODE=ok
+    rc=0
+    m53_err="$("$ZD" task --background --model GLM-5.3-Flash --resume-task "$id53" --prompt-file "$prompt" 2>&1)" || rc=$?
+    if [[ "$st" == completed && "$("$ZD" status "$id" --json | jfield job.model)" == 'GLM-5.3$max' && "$rc" -eq 2 && "$m53_err" == *"ran on GLM-5.3, not GLM-5.3-Flash"*"dispatch --fresh"* ]] \
+        && REC="$TEST_ROOT/m53-resume.json" PCFG="$pcfg53" node -e '
+const r = JSON.parse(require("node:fs").readFileSync(process.env.REC, "utf8"));
+process.exit(r.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE === process.env.PCFG ? 0 : 1);'; then
+        pass "15b a resume without --model keeps the job's model (GLM-5.3 config); another --model on a resume is refused (exit 2, dispatch --fresh)"
+    else
+        fail "15b a resume without --model keeps the job's model (GLM-5.3 config); another --model on a resume is refused (exit 2, dispatch --fresh)"
+        echo "    status: $st rc: $rc err: $m53_err"
+    fi
+
+    # Before 0.14.0 only the default file existed: GLM-5.3 is a WARN in doctor, refused by task, set up by api-key sync.
+    rm -f "$pcfg53"
+    local d_rc=0 dm_rc=0 sync_rc=0 dout dmout sync_out
+    dout="$("$ZD" doctor)" || d_rc=$?
+    dmout="$("$ZD" doctor --model GLM-5.3)" || dm_rc=$?
+    rc=0
+    m53_err="$("$ZD" task --background --model GLM-5.3 --prompt-file "$prompt" 2>&1)" || rc=$?
+    sync_out="$("$ZD" api-key sync 2>&1)" || sync_rc=$?
+    if [[ "$d_rc" -eq 0 && "$dout" == *"WARN personal-config GLM-5.3: $pcfg53 does not exist"*"api-key sync"* \
+        && "$dm_rc" -eq 1 && "$dmout" == *"FAIL personal-config GLM-5.3:"* \
+        && "$rc" -eq 2 && "$m53_err" == *"api-key sync"* \
+        && "$sync_rc" -eq 0 && "$sync_out" == "api-key: the stored key now also serves GLM-5.3;"* && "$sync_out" != *"$fake_key"* \
+        && "$(mode_of "$pcfg53")" == 600 && "$("$ZD" doctor --model GLM-5.3)" == *"ok personal-config GLM-5.3"*"doctor: ok"* ]] \
+        && grep -Fq "$fake_key" "$pcfg53"; then
+        pass "15b without the GLM-5.3 file: doctor WARN (exit 0), doctor --model GLM-5.3 FAIL, task --model GLM-5.3 refused naming api-key sync; api-key sync copies the stored key there (no key printed)"
+    else
+        fail "15b without the GLM-5.3 file: doctor WARN (exit 0), doctor --model GLM-5.3 FAIL, task --model GLM-5.3 refused naming api-key sync; api-key sync copies the stored key there (no key printed)"
+        echo "    doctor=$d_rc doctor-model=$dm_rc task=$rc sync=$sync_rc: $sync_out"
+        echo "$dout" | grep GLM-5.3 | sed 's/^/    /'
+    fi
+
     rc=0
     out="$(ZCODE_STUB_MODE=auth ZCODE_STUB_MESSAGE="$(first_pattern auth)" "$ZD" doctor --probe 2>"$TEST_ROOT/key-probe.err")" || rc=$?
     if [[ "$rc" -eq 1 && "$out" == *"model-selected: FAIL(auth)"* ]] && grep -Fq "could not use the Coding Plan API key" "$TEST_ROOT/key-probe.err" \
@@ -1469,10 +1541,10 @@ const o = JSON.parse(text);
 const at = (x) => process.env.SEL_PATH.split(".").reduce((a, k) => (a == null ? undefined : a[k]), x);
 const rules = o.config.providerConfigRules.providerRules;
 process.exit(!text.includes(process.env.KEY) && rules.length === 1 && rules[0].providerId === "other-provider"
-  && JSON.stringify(at(o)) === process.env.PINNED ? 0 : 1);'; then
-        pass "15 api-key clear removes only the key rule (other rules kept), keeps PINNED_SELECTION; doctor then fails 'auth: no Coding Plan API key' (exit 1)"
+  && JSON.stringify(at(o)) === process.env.PINNED ? 0 : 1);' && ! grep -Fq "$fake_key" "$pcfg53"; then
+        pass "15 api-key clear removes only the key rule (other rules kept), keeps PINNED_SELECTION, and clears the GLM-5.3 file too; doctor then fails 'auth: no Coding Plan API key' (exit 1)"
     else
-        fail "15 api-key clear removes only the key rule (other rules kept), keeps PINNED_SELECTION; doctor then fails 'auth: no Coding Plan API key' (exit 1)"
+        fail "15 api-key clear removes only the key rule (other rules kept), keeps PINNED_SELECTION, and clears the GLM-5.3 file too; doctor then fails 'auth: no Coding Plan API key' (exit 1)"
         echo "    exit: $rc out: $key_out"
     fi
     rc=0

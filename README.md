@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version 0.13.1" src="https://img.shields.io/badge/version-0.13.1-7c8cff?style=flat-square">
+  <img alt="Version 0.14.0" src="https://img.shields.io/badge/version-0.14.0-7c8cff?style=flat-square">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude_Code-plugin-d97757?style=flat-square">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-35d6a6?style=flat-square">
 </p>
@@ -38,6 +38,8 @@ codex login
 Only the built-in scheme needs Codex. If you have no OpenAI account, skip it, and before the first pipeline run bind every role whose built-in chain names a Codex profile (`plan-reviewer`, `spec-reviewer`, `implementer`, `implementer.risk`, `implementer.escalation`, `control-review`, `final-review`, `adhoc-review`) to profiles of your own: see [Role routing](#role-routing), the example for someone without OpenAI. `agent-dispatch doctor` then reports the unused Codex profiles as WARN, not FAIL.
 
 Optional — the default implementer, **GLM-5.3-Flash via Z.ai's ZCode**: install [ZCode](https://github.com/zai-org/ZCode) — macOS: ZCode.app into `/Applications`; Linux: see [Linux: ZCode for the GLM channel](#linux-zcode-for-the-glm-channel) below; Windows is not supported yet — then store a GLM Coding Plan API key from <https://z.ai/manage-apikey/apikey-list> once: run `zcode-dispatch api-key set` in a terminal and paste the key at the hidden prompt. The key becomes a provider of ZCode's own "Z.ai Coding Plan" template in the wrapper's private config and does not expire. There is no OAuth login: the CLI's `zcode login` keeps no refresh token and lasts about an hour (details in the `zcode-invocation` skill, "One-time setup"). Without a key, `zcode-dispatch doctor` fails and the pipeline implements on Codex Luna `max` instead — announced, never silent. Behind a local proxy, export `ZCODE_HTTP_PROXY=http://<host>:<port>` if headless runs fail with a network error (the CLI ignores `HTTP(S)_PROXY` and the macOS system proxy; the wrapper passes this variable via the allowlist). The CLI receives an allowlisted environment; explicitly pass extra names with `ZCODE_ENV_PASSTHROUGH="NAME1,NAME2"`.
+
+The bigger **GLM-5.3** runs on the same key and Coding Plan through the built-in profile `glm-pro` (`zcode-dispatch task --model GLM-5.3`). Nothing routes to it by default: name it in a role of your `config.json`, e.g. `"implementer": ["glm-pro", "glm", "luna"]`. `api-key set` stores the key for both models; a key stored before 0.14.0 reaches GLM-5.3 with `zcode-dispatch api-key sync` (no key typed). Check it with `zcode-dispatch doctor --probe --model GLM-5.3`. Both profiles spend the same quota (`shares: zai-coding-plan`), GLM-5.3 faster than Flash, and a `quota` on one drops both.
 
 #### Linux: ZCode for the GLM channel
 
