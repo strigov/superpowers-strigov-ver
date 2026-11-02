@@ -48,7 +48,7 @@ import path from "node:path";
 import { UsageError, parseEvents } from "../agent-core.mjs";
 
 export const VERIFIED_VERSIONS = ["2.4.1"];
-export const INSTALL_HINT = "npm i -g @moonshot-ai/kimi-code@2.4.1 (on Windows npm installs a .cmd shim, which is not started: give the profile \"wrap\": [\"node\"] and \"bin\": \"<npm prefix>\\\\node_modules\\\\@moonshot-ai\\\\kimi-code\\\\dist\\\\main.mjs\")";
+export const INSTALL_HINT = "npm i -g @moonshot-ai/kimi-code@2.4.1, or on Windows the native kimi.exe from WinGet (with npm on Windows, npm installs a .cmd shim, which is not started: give the profile \"wrap\": [\"node\"] and \"bin\": \"<npm prefix>\\\\node_modules\\\\@moonshot-ai\\\\kimi-code\\\\dist\\\\main.mjs\")";
 export const HOME_VAR = "KIMI_CODE_HOME";
 // The variable the job's key travels in; config.toml names it (api_key_env), never the key.
 export const KEY_VAR = "AGENT_DISPATCH_KIMI_API_KEY";
