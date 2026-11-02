@@ -1503,13 +1503,18 @@ export function searchWindowsPath(file, env = process.env, cwd = process.cwd()) 
 }
 
 // argv as `agent-proc run` takes it: the executable (searchWindowsPath) and the quoted command line, both base64 of
-// UTF-8. Throws spawn()'s ENOENT error when the executable is not found.
-function windowsInvocation(argv, env, cwd) {
+// UTF-8. Throws spawn()'s ENOENT error when the executable is not found. With `cmdlineFile` the command line is
+// written there instead and passed as --cmdline-file: a harness's command line may carry the whole prompt (kimi's -p,
+// ZCode's -p), and its base64 in the helper's own command line would cap it at about 24 000 bytes of UTF-8.
+export function windowsInvocation(argv, env, cwd, { cmdlineFile = null } = {}) {
   const [cmd, ...args] = argv;
   const app = searchWindowsPath(cmd, env, cwd);
   if (!app) throw Object.assign(new Error(`spawn ${cmd} ENOENT`), { code: "ENOENT", errno: -4058, syscall: `spawn ${cmd}`, path: cmd, spawnargs: args });
   const b64 = (text) => Buffer.from(text, "utf8").toString("base64");
-  return [b64(app), b64(argv.map(quoteWindowsArg).join(" "))];
+  const commandLine = argv.map(quoteWindowsArg).join(" ");
+  if (!cmdlineFile) return [b64(app), b64(commandLine)];
+  fs.writeFileSync(cmdlineFile, commandLine, { mode: 0o600 });
+  return ["--cmdline-file", cmdlineFile, b64(app)];
 }
 
 // A private scratch dir for one `agent-proc run --status-file`, and the status read back (null when the helper wrote
@@ -2031,8 +2036,8 @@ export function runCli({ argv, cwd, env, stdinPath = null, timeoutMs, logPath = 
         // The helper leads the harness's job (see "Windows: the process helper"): child.pid is the helper's.
         const helper = winHelper();
         if (!helper) throw Object.assign(new Error(`the Windows process helper is unavailable: ${winHelperError()}`), { code: "ESUPERVISOR" });
-        const invocation = windowsInvocation(argv, env, cwd);
         winDir = winStatusDir();
+        const invocation = windowsInvocation(argv, env, cwd, { cmdlineFile: path.join(winDir, "cmdline.txt") });
         child = spawn(helper, ["run", "--status-file", path.join(winDir, "status.json"), ...invocation], { cwd, env, windowsHide: true, stdio });
       } else child = spawn(argv[0], argv.slice(1), { cwd, env, detached: true, stdio });
     } catch (error) {

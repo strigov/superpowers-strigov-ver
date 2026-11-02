@@ -1594,7 +1594,7 @@ async function cmdDoctor(args) {
     // Windows: every background job and auxiliary command runs under the compiled process helper (agent-core.mjs).
     const helper = core.winHelper();
     if (helper) report("ok", "platform", `win32: process helper ${helper} (each job in a Job Object; a stop is TerminateProcess, no polite signal)`);
-    else report("FAIL", "platform", `win32: ${core.winHelperError()}; no job of a core harness (claude, opencode, pi, dsh, kimi) can start`);
+    else report("FAIL", "platform", `win32: ${core.winHelperError()}; no job of a core harness (claude, opencode, pi, dsh, kimi) can start, nor a zcode-dispatch job (glm, glm-pro), which runs on the same helper`);
   }
   try {
     const names = core.passthroughNames();

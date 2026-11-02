@@ -2,8 +2,16 @@
 # Tests for bin/zcode-dispatch, the ZCode CLI job wrapper. Zero model calls:
 # ZCODE_BIN points at tests/fixtures/zcode-stub.cjs, ZCODE_APP at a fake install
 # (tests/fixtures/FakeZCode.app on macOS, a resources/ tree built from it on Linux),
-# and all job state lives under a temp root. Runs on macOS and Linux.
+# and all job state lives under a temp root. Runs on macOS and Linux; on Windows tests/test-zcode-dispatch-windows.sh
+# covers the wrapper (process groups, signals and file modes do not exist there).
 set -euo pipefail
+
+case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*)
+        echo "test-zcode-dispatch: skipped on Windows (see tests/test-zcode-dispatch-windows.sh)"
+        exit 0
+        ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"

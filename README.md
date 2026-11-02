@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version 0.15.0" src="https://img.shields.io/badge/version-0.15.0-7c8cff?style=flat-square">
+  <img alt="Version 0.16.0" src="https://img.shields.io/badge/version-0.16.0-7c8cff?style=flat-square">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude_Code-plugin-d97757?style=flat-square">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-35d6a6?style=flat-square">
 </p>
@@ -37,7 +37,7 @@ codex login
 
 Only the built-in scheme needs Codex. If you have no OpenAI account, skip it, and before the first pipeline run bind every role whose built-in chain names a Codex profile (`plan-reviewer`, `spec-reviewer`, `implementer`, `implementer.risk`, `implementer.escalation`, `control-review`, `final-review`, `adhoc-review`) to profiles of your own: see [Role routing](#role-routing), the example for someone without OpenAI. `agent-dispatch doctor` then reports the unused Codex profiles as WARN, not FAIL.
 
-Optional — the default implementer, **GLM-5.3-Flash via Z.ai's ZCode**: install [ZCode](https://github.com/zai-org/ZCode) — macOS: ZCode.app into `/Applications`; Linux: see [Linux: ZCode for the GLM channel](#linux-zcode-for-the-glm-channel) below; Windows is not supported yet — then store a GLM Coding Plan API key from <https://z.ai/manage-apikey/apikey-list> once: run `zcode-dispatch api-key set` in a terminal and paste the key at the hidden prompt. The key becomes a provider of ZCode's own "Z.ai Coding Plan" template in the wrapper's private config and does not expire. There is no OAuth login: the CLI's `zcode login` keeps no refresh token and lasts about an hour (details in the `zcode-invocation` skill, "One-time setup"). Without a key, `zcode-dispatch doctor` fails and the pipeline implements on Codex Luna `max` instead — announced, never silent. Behind a local proxy, export `ZCODE_HTTP_PROXY=http://<host>:<port>` if headless runs fail with a network error (the CLI ignores `HTTP(S)_PROXY` and the macOS system proxy; the wrapper passes this variable via the allowlist). The CLI receives an allowlisted environment; explicitly pass extra names with `ZCODE_ENV_PASSTHROUGH="NAME1,NAME2"`.
+Optional — the default implementer, **GLM-5.3-Flash via Z.ai's ZCode**: install [ZCode](https://github.com/zai-org/ZCode) — macOS: ZCode.app into `/Applications`; Linux: see [Linux: ZCode for the GLM channel](#linux-zcode-for-the-glm-channel) below; Windows: Z.ai's per-user installer from <https://zcode.z.ai> (into `%LOCALAPPDATA%\Programs\ZCode`), see [Windows](#windows) below — then store a GLM Coding Plan API key from <https://z.ai/manage-apikey/apikey-list> once: run `zcode-dispatch api-key set` in a terminal and paste the key at the hidden prompt. The key becomes a provider of ZCode's own "Z.ai Coding Plan" template in the wrapper's private config and does not expire. There is no OAuth login: the CLI's `zcode login` keeps no refresh token and lasts about an hour (details in the `zcode-invocation` skill, "One-time setup"). Without a key, `zcode-dispatch doctor` fails and the pipeline implements on Codex Luna `max` instead — announced, never silent. Behind a local proxy, export `ZCODE_HTTP_PROXY=http://<host>:<port>` if headless runs fail with a network error (the CLI ignores `HTTP(S)_PROXY` and the macOS system proxy; the wrapper passes this variable via the allowlist). The CLI receives an allowlisted environment; explicitly pass extra names with `ZCODE_ENV_PASSTHROUGH="NAME1,NAME2"`.
 
 The bigger **GLM-5.3** runs on the same key and Coding Plan through the built-in profile `glm-pro` (`zcode-dispatch task --model GLM-5.3`). Nothing routes to it by default: name it in a role of your `config.json`, e.g. `"implementer": ["glm-pro", "glm", "luna"]`. `api-key set` stores the key for both models; a key stored before 0.14.0 reaches GLM-5.3 with `zcode-dispatch api-key sync` (no key typed). Check it with `zcode-dispatch doctor --probe --model GLM-5.3`. Both profiles spend the same quota (`shares: zai-coding-plan`), GLM-5.3 faster than Flash, and a `quota` on one drops both.
 
@@ -158,8 +158,14 @@ What differs from macOS and Linux:
 - The harness must be an `.exe`. The native Claude Code installer provides `claude.exe`. An npm `.cmd` shim (`opencode.cmd`, `pi.cmd`) cannot start without a shell, so point the profile's `bin` at the real executable. Only the `claude` adapter has been checked on Windows so far.
 - `"sandbox": "native"` is not available (`doctor` FAIL).
 - File modes do not apply. The data directory under `%USERPROFILE%\.claude` is private through the user profile's ACL.
-- The Codex pass-through runs `codex-dispatch` under Git Bash. ZCode (`glm`) does not support Windows yet.
+- The Codex pass-through runs `codex-dispatch` under Git Bash, and so does the ZCode one (`glm`, `glm-pro`, since 0.16.0): see below.
 - Store keys from PowerShell or cmd: `node <plugin>\bin\lib\agent-dispatch.mjs key set <name>`, then paste the key at the hidden prompt. Git Bash's terminal is not a console for Node, so it cannot hide what you type.
+
+**ZCode on Windows (0.16.0).** GLM-5.3-Flash (`glm`) and GLM-5.3 (`glm-pro`) run natively. Checked on Windows 11 with ZCode 3.17.1 (CLI 0.17.1) and Node 22: `doctor --probe` on both models, a background task with tool calls, a `--resume-task` round, and the model in the CLI's own log. Install ZCode with Z.ai's installer from <https://zcode.z.ai>; it goes into `%LOCALAPPDATA%\Programs\ZCode`, the wrapper's default (`ZCODE_APP` for another place). The CLI `resources\glm\zcode.cjs` runs under the `node` on `PATH`. Store the Coding Plan key from PowerShell or cmd: `node <plugin>\bin\lib\zcode-dispatch.mjs api-key set`. Then:
+
+- Each CLI run sits in a Job Object of the same process helper. A cancel or a timeout is one `TerminateProcess` for the whole tree, and a runner that dies takes the CLI with it. ZCode cannot save its session on a cancel, but a cancelled job is never resumed anyway.
+- The config lock uses Windows share modes. A run keeps the config file open in shared mode, and `api-key set` / `sync` / `clear` need it exclusively, so they wait and refuse while a run lives. No pid is involved.
+- The prompt travels on the command line, as on macOS and Linux. Windows takes about 30 000 characters (UTF-16 units). A longer prompt is refused at task time, and the orchestrator hands it to Luna fresh, announced.
 
 ### A profile in three steps
 
@@ -525,6 +531,7 @@ The upstream `subagent-driven-development` skill is replaced by `dev-orchestrato
 ├── tests/test-zcode-dispatch.sh     # ZCode wrapper tests (stubbed CLI)
 ├── tests/test-agent-core.sh         # Job core tests (trivial adapter)
 ├── tests/test-agent-core-windows.sh # Job core on Windows (Git Bash)
+├── tests/test-zcode-dispatch-windows.sh # ZCode wrapper on Windows (Git Bash)
 ├── tests/test-agent-dispatch.sh     # agent-dispatch tests (stubbed wrappers)
 ├── tests/test-adapter-*.sh          # Harness adapter tests (stubbed harnesses)
 ├── tests/test-orchestrator-defaults.sh  # Built-in roles, commands and caps unchanged
@@ -552,6 +559,7 @@ bash tests/test-pipeline-context.sh
 bash tests/test-zcode-dispatch.sh
 bash tests/test-agent-core.sh
 bash tests/test-agent-core-windows.sh  # on Windows, under Git Bash; skips elsewhere
+bash tests/test-zcode-dispatch-windows.sh  # likewise
 bash tests/test-agent-dispatch.sh
 for t in claude opencode pi dsh; do bash tests/test-adapter-$t.sh; done
 bash tests/test-orchestrator-defaults.sh

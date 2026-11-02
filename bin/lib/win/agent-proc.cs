@@ -23,6 +23,10 @@
 //                                           job to the ownership log F (which must exist), as boundedExec's
 //                                           supervisor does on POSIX
 //                          --status-file F  write the outcome there as one JSON object before exiting
+//                          --cmdline-file F read the command line from file F (UTF-8, as is) instead of <cmdline>,
+//                                           which is then left out: base64 of UTF-8 in this helper's own command line
+//                                           would cap a command line at about 24 000 bytes of UTF-8 instead of the
+//                                           32 767 UTF-16 units CreateProcess takes
 // A start time is "ft:<n>": the creation time from GetProcessTimes, in 100 ns units since 1601 (UTC). It is fixed when
 // the process is created, so a clock step never changes it, and the pid of an ended process that Windows hands out
 // again comes with another one.
@@ -277,7 +281,7 @@ static class AgentProc
     {
         DateTime started = DateTime.UtcNow;
         long timeoutMs = 0;
-        string stopFile = null, ownerLog = null, statusFile = null;
+        string stopFile = null, ownerLog = null, statusFile = null, cmdlineFile = null;
         List<string> positional = new List<string>();
         for (int i = 1; i < args.Length; i++)
         {
@@ -285,11 +289,12 @@ static class AgentProc
             else if (args[i] == "--stop-file" && i + 1 < args.Length) stopFile = args[++i];
             else if (args[i] == "--owner-log" && i + 1 < args.Length) ownerLog = args[++i];
             else if (args[i] == "--status-file" && i + 1 < args.Length) statusFile = args[++i];
+            else if (args[i] == "--cmdline-file" && i + 1 < args.Length) cmdlineFile = args[++i];
             else positional.Add(args[i]);
         }
-        if (positional.Count != 2) throw new ArgumentException("run needs <app-b64> <cmdline-b64>");
+        if (positional.Count != (cmdlineFile == null ? 2 : 1)) throw new ArgumentException(cmdlineFile == null ? "run needs <app-b64> <cmdline-b64>" : "run --cmdline-file F needs <app-b64> only");
         string app = positional[0] == "-" ? null : Encoding.UTF8.GetString(Convert.FromBase64String(positional[0]));
-        string commandLine = Encoding.UTF8.GetString(Convert.FromBase64String(positional[1]));
+        string commandLine = cmdlineFile != null ? File.ReadAllText(cmdlineFile, new UTF8Encoding(false)) : Encoding.UTF8.GetString(Convert.FromBase64String(positional[1]));
         DateTime deadline = timeoutMs > 0 ? started.AddMilliseconds(timeoutMs) : DateTime.MaxValue;
 
         Outcome outcome = new Outcome();

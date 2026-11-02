@@ -1,6 +1,7 @@
 // zcode-dispatch.mjs — background-job wrapper around Z.ai's official ZCode CLI
 // (the Agent CLI embedded in the ZCode desktop app: /Applications/ZCode.app on macOS,
-// /opt/ZCode on Linux), shaped like the vendored Codex companion: task / status / result / cancel / doctor.
+// /opt/ZCode on Linux, %LOCALAPPDATA%\Programs\ZCode on Windows), shaped like the vendored Codex companion:
+// task / status / result / cancel / doctor.
 //
 // Pure Node ESM, no dependencies, no shell: every child process is spawned with
 // an argv array. Never reads or writes the user's ~/.zcode (shared with the desktop
@@ -26,6 +27,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+// Windows only: the core's process helper (a Job Object per CLI run, start times, the boot id) and its command-line
+// quoting. See "processes" below.
+import { ENV_ALLOW_WINDOWS, processStart, windowsInvocation, winHelper, winHelperError } from "./agent-core.mjs";
+
+const IS_WIN = process.platform === "win32";
 
 // ---- Values copied from docs/zcode-cli-findings.md "## Inputs for later phases" ----
 export const PINNED_MODEL = "GLM-5.3-Flash$max";
@@ -35,8 +41,11 @@ export const PROMPT_TRANSPORT = "argv"; // "argv" | "stdin"
 // The argv transport passes the whole prompt as one argument. Linux caps a single argument at 32 pages
 // (MAX_ARG_STRLEN: 131072 bytes with its NUL; a 131072-byte argument fails with E2BIG), macOS only the total.
 export const MAX_PROMPT_BYTES = process.platform === "linux" ? 120 * 1024 : 200 * 1024;
+// Windows caps the whole command line at 32 767 UTF-16 units, quoting included (CreateProcess); the rest of the
+// argv (node, zcode.cjs, the flags, the workspace path) stays well inside the headroom left here.
+export const MAX_PROMPT_UNITS_WIN = 30_000;
 export const APP_VERSION_PLIST_KEY = "CFBundleShortVersionString";
-export const SUPPORTED_PLATFORMS = ["darwin", "linux"];
+export const SUPPORTED_PLATFORMS = ["darwin", "linux", "win32"];
 export const MODEL_ARGS = []; // MODEL_MECHANISM flag:<--name> → ["<--name>", PINNED_MODEL]
 export const MODEL_ENV = {}; // MODEL_MECHANISM env:<NAME> → { "<NAME>": PINNED_MODEL }
 // MODEL_MECHANISM personal-config: the selection at SELECTION_PATH of the wrapper-owned personal provider
@@ -112,6 +121,8 @@ export const ENV_ALLOW = [
   "DEVELOPER_DIR", "ANDROID_HOME", "ANDROID_SDK_ROOT",
 ];
 export const ENV_ALLOW_PREFIXES = ["LC_", "XDG_"];
+// Windows adds the system's own variables (the core's ENV_ALLOW_WINDOWS: SystemRoot, ComSpec, TEMP, USERPROFILE, …),
+// and its names are case-insensitive: the inherited "Path" passes as PATH.
 // ZCODE_CREDENTIAL_SECRET is the one ENV_ALLOW entry that matches the secret suffix rule: the CLI
 // cannot decrypt its own credentials without it when it is set.
 export const ENV_DENY = [/_(TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIALS)$/i, /^(AWS|GITHUB|GH|ANTHROPIC|OPENAI|CLAUDE)_/i];
@@ -135,14 +146,19 @@ class UsageError extends Error {}
 
 // The app's install layout. ZCode is an Electron app, and electron-builder puts the CLI (glm/zcode.cjs), the
 // built-in provider config and app.asar into the same resources directory on every platform: Contents/Resources
-// in the macOS bundle, resources/ beside the executable elsewhere (/opt/ZCode is the Linux deb/rpm default). The
+// in the macOS bundle, resources/ beside the executable elsewhere (/opt/ZCode is the Linux deb/rpm default; the
+// Windows installer is a per-user NSIS one into %LOCALAPPDATA%\Programs\ZCode, checked with ZCode 3.17.1). The
 // app version comes from Info.plist on macOS and from app.asar's package.json elsewhere (electron-builder writes
 // the same version into both).
-const DEFAULT_APP = { darwin: "/Applications/ZCode.app", linux: "/opt/ZCode" };
+const DEFAULT_APP = {
+  darwin: () => "/Applications/ZCode.app",
+  linux: () => "/opt/ZCode",
+  win32: (env) => path.join(env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "Programs", "ZCode"),
+};
 
 function zcodePaths(env = process.env) {
   const darwin = process.platform === "darwin";
-  const app = env.ZCODE_APP || DEFAULT_APP[process.platform] || DEFAULT_APP.linux;
+  const app = env.ZCODE_APP || (DEFAULT_APP[process.platform] ?? DEFAULT_APP.linux)(env);
   const resources = darwin ? path.join(app, "Contents", "Resources") : path.join(app, "resources");
   return {
     app,
@@ -275,13 +291,15 @@ const isDenied = (name) => ENV_DENY.some((pattern) => pattern.test(name));
 // The caller's variables the CLI may see. CLI-home and other wrapper-owned settings are added
 // after this filter in buildCliEnv so inherited and explicitly passed spoofed values lose.
 export function filterCliEnv(source = process.env) {
-  const passthrough = new Set(passthroughNames(source));
-  const allow = new Set(ENV_ALLOW);
+  const fold = IS_WIN ? (name) => name.toUpperCase() : (name) => name;
+  const passthrough = new Set(passthroughNames(source).map(fold));
+  const allow = new Set([...ENV_ALLOW, ...(IS_WIN ? ENV_ALLOW_WINDOWS : [])].map(fold));
   const env = {};
   for (const [name, value] of Object.entries(source)) {
-    if (value === undefined || name === "ZCODE_SESSION_DB") continue;
-    const prefixed = ENV_ALLOW_PREFIXES.some((prefix) => name.startsWith(prefix));
-    if (passthrough.has(name) || allow.has(name) || (prefixed && !isDenied(name))) env[name] = value;
+    if (value === undefined || fold(name) === "ZCODE_SESSION_DB") continue;
+    const key = fold(name);
+    const prefixed = ENV_ALLOW_PREFIXES.some((prefix) => key.startsWith(prefix));
+    if (passthrough.has(key) || allow.has(key) || (prefixed && !isDenied(name))) env[name] = value;
   }
   return env;
 }
@@ -503,16 +521,28 @@ function sweepTempCopies(file) {
 //   Linux — open(2) first, then flock(1) from util-linux locks that descriptor, passed to it as its fd 3: the
 //           lock belongs to the open file description it shares with this process, so it stays after flock(1)
 //           exits.
+//   Windows — by share modes, which CreateFile checks atomically against every open handle of the file. A shared
+//           holder opens it as Node always does (sharing read, write and delete); an exclusive one opens it with
+//           libuv's UV_FS_O_EXLOCK (share mode 0), which fails with EBUSY while any other handle is open and makes
+//           every later open fail while it is. So readers coexist, a writer excludes everyone, and the handle
+//           goes when its process ends — no pid. The handle is not inherited: a run keeps it in the runner, and
+//           the CLI cannot outlive the runner there, because it runs inside the core helper's Job Object, which a
+//           runner that ends takes down with everything in it ("processes" below).
 const LOCK_SHARED = "shared";
 const LOCK_EXCLUSIVE = "exclusive";
 const O_SHLOCK = 0x10; // macOS only: these open(2) flags mean something else, or nothing, elsewhere
 const O_EXLOCK = 0x20;
+const UV_FS_O_EXLOCK = 0x10000000; // Windows only (libuv; Node does not export it in fs.constants)
 const configLockFile = () => `${personalConfigFile()}.lock`;
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-// Why the config lock cannot be taken on this machine, or null.
+// Why the config lock cannot be taken, or (Windows) no CLI can be contained, on this machine; or null.
 function configLockProblem() {
-  if (!SUPPORTED_PLATFORMS.includes(process.platform)) return `${process.platform}: zcode-dispatch supports ${SUPPORTED_PLATFORMS.join(" and ")} only`;
+  if (!SUPPORTED_PLATFORMS.includes(process.platform)) return `${process.platform}: zcode-dispatch supports ${SUPPORTED_PLATFORMS.join(", ")} only`;
+  if (IS_WIN) {
+    const helperProblem = winHelperError();
+    return helperProblem ? `win32: ${helperProblem}; without the process helper no ZCode CLI can be started or stopped` : null;
+  }
   if (process.platform !== "linux") return null;
   const r = spawnSync("flock", ["--version"], { encoding: "utf8" });
   if (r.error || r.status !== 0) return "linux: flock(1) from util-linux is not on PATH; the config lock needs it (e.g. apt install util-linux)";
@@ -535,13 +565,16 @@ function openConfigLock(kind, waitMs) {
   ensurePrivateDir(stateRoot());
   const deadline = Date.now() + waitMs;
   const baseFlags = fs.constants.O_RDWR | fs.constants.O_CREAT;
-  if (process.platform === "darwin") {
-    const flags = baseFlags | fs.constants.O_NONBLOCK | (kind === LOCK_SHARED ? O_SHLOCK : O_EXLOCK);
+  if (process.platform === "darwin" || IS_WIN) {
+    const flags = IS_WIN
+      ? baseFlags | (kind === LOCK_SHARED ? 0 : UV_FS_O_EXLOCK)
+      : baseFlags | fs.constants.O_NONBLOCK | (kind === LOCK_SHARED ? O_SHLOCK : O_EXLOCK);
+    const busy = IS_WIN ? ["EBUSY"] : ["EAGAIN", "EWOULDBLOCK"];
     for (;;) {
       try {
         return fs.openSync(configLockFile(), flags, 0o600);
       } catch (error) {
-        if (error.code !== "EAGAIN" && error.code !== "EWOULDBLOCK") throw error;
+        if (!busy.includes(error.code)) throw error;
         if (Date.now() >= deadline) return null;
         sleepSync(50);
       }
@@ -570,7 +603,8 @@ function openConfigLock(kind, waitMs) {
 export function setApiKeyRule(apiKey) {
   const lockFd = openConfigLock(LOCK_EXCLUSIVE, 2_000);
   if (lockFd === null) {
-    throw new UsageError(`a GLM run (task or probe — its runner or CLI) still holds ${configLockFile()} (see: lsof ${configLockFile()}); store or clear the key after it ends, or cancel the task; nothing changed`);
+    const see = IS_WIN ? "see: zcode-dispatch status" : `see: lsof ${configLockFile()}`;
+    throw new UsageError(`a GLM run (task or probe — its runner or CLI) still holds ${configLockFile()} (${see}); store or clear the key after it ends, or cancel the task; nothing changed`);
   }
   try {
     let key = apiKey;
@@ -695,9 +729,30 @@ function isAlive(pid) {
   }
 }
 
+// Windows has no process groups and no signal but TerminateProcess. There the CLI runs under the core's process
+// helper (`agent-proc run`, bin/lib/win/agent-proc.cs) inside a Job Object of its own that allows no breakaway and
+// kills everything in it once its last handle closes: the helper's pid stands for the CLI's process group (childPid),
+// and one TerminateProcess to it ends the CLI and every descendant, also one whose parent has ended. The helper is a
+// plain child of the runner, and Node keeps such children in a kill-on-close job of its own, so a runner that dies
+// takes the whole tree with it. Windows hands out the pid of an ended process again soon, so childStartedAt (the
+// helper's creation time, `ft:<n>`) is recorded with it, and a stored pid is signalled only while that start time
+// still matches; a pid whose start time cannot be read counts as alive and is never signalled. Every signal is
+// TerminateProcess: SIGTERM and SIGKILL are the same there, and the grace periods (TIMEOUT_KILL_GRACE_MS,
+// CANCEL_GRACE_MS) only wait for an exit that has already happened.
+
+// Whether the pid still names the process that started at startedAt: "ours", "gone" or "unknown".
+function winIdentity(pid, startedAt) {
+  if (!isAlive(pid)) return "gone";
+  if (typeof startedAt !== "string" || startedAt === "") return "unknown";
+  const now = processStart(pid, { like: startedAt });
+  if (now === null) return "unknown";
+  return now === startedAt ? "ours" : "gone";
+}
+
 // pid 1 is never a CLI process group, and kill(-1) would signal every process of the user.
-function groupAlive(pid) {
+function groupAlive(pid, startedAt = null) {
   if (!Number.isInteger(pid) || pid <= 1) return false;
+  if (IS_WIN) return winIdentity(pid, startedAt) !== "gone";
   try {
     process.kill(-pid, 0);
     return true;
@@ -706,10 +761,11 @@ function groupAlive(pid) {
   }
 }
 
-function killGroup(pid, signal) {
+function killGroup(pid, signal, startedAt = null) {
   if (!Number.isInteger(pid) || pid <= 1) return;
+  if (IS_WIN && winIdentity(pid, startedAt) !== "ours") return;
   try {
-    process.kill(-pid, signal);
+    process.kill(IS_WIN ? pid : -pid, signal);
   } catch {
     // group already gone
   }
@@ -721,7 +777,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // After a reboot the runnerPid / childPid / holderPid in the state files may name unrelated
 // processes (EPERM for another user's process reads as alive). Job records and reservations store the
 // boot id they were written in (kern.bootsessionuuid on macOS, /proc/sys/kernel/random/boot_id on
-// Linux). Three cases, immune to wall-clock steps (no timestamp is ever evidence):
+// Linux, the core helper's `boot` on Windows). Three cases, immune to wall-clock steps (no timestamp is ever evidence):
 //   current — the stored id equals the readable current id: the usual pid checks and signals apply;
 //   earlier — the stored id differs from the readable current id: dead without any pid check, never
 //             signalled;
@@ -743,6 +799,12 @@ function readBootId() {
     } catch {
       // no boot id: every stamp reads as unknown
     }
+  } else if (IS_WIN) {
+    // The core helper's `boot`: the registry's BootId counter and the creation time of the System process.
+    const helper = winHelper();
+    const r = helper ? spawnSync(helper, ["boot"], { encoding: "utf8", windowsHide: true, timeout: 10_000 }) : null;
+    const id = r && !r.error && r.status === 0 ? r.stdout.trim() : "";
+    if (id && id !== "-") return `win:${id}`;
   }
   return null;
 }
@@ -898,7 +960,7 @@ function cmdReleaseStale(args) {
 
   const job = ID_RE.test(record.jobId ?? "") ? readRecord(jobFile(ws.jobsDir, record.jobId)) : null;
   const jobRebooted = rebooted || (job !== null && bootOf(job.bootId) === "earlier");
-  if (!jobRebooted && job?.childPid && groupAlive(job.childPid)) {
+  if (!jobRebooted && job?.childPid && groupAlive(job.childPid, job.childStartedAt)) {
     throw new UsageError(`workspace reservation generation ${generation} still has live CLI process group ${job.childPid}`);
   }
 
@@ -954,7 +1016,7 @@ function reapDeadRunners(jobsDir) {
       continue;
     }
     if (isAlive(record.runnerPid)) continue;
-    if (boot === "current") killGroup(record.childPid, "SIGKILL");
+    if (boot === "current") killGroup(record.childPid, "SIGKILL", record.childStartedAt);
     const after = finalizeRecord(file, { status: "failed", errorClass: "crash", note: "runner died" });
     if (after?.note === "runner died") {
       appendLog(logFile(jobsDir, record.id), boot === "current" ? "runner died; liveness check marked the job failed/crash" : `runner died; liveness check marked the job failed/crash; CLI process group ${record.childPid} ${UNKNOWN_BOOT_NOTE}`);
@@ -1007,9 +1069,10 @@ function summarizeArgv(argv) {
     .join(" ");
 }
 
-// Runs the CLI as its own process group; resolves once it has exited and its output is drained.
-// `redact` (keyRedactor) is applied to everything the wrapper keeps: stderr is handled line by line,
-// so a key split across chunks is still caught before it reaches the log or stderrTail.
+// Runs the CLI as its own process group (Windows: under the core helper, whose pid stands for the group; extraFds are
+// not passed there); resolves once it has exited and its output is drained. onSpawn gets the group's pid and, on
+// Windows, the helper's start time; when it returns false the CLI is stopped at once. `redact` (keyRedactor) is applied to everything the wrapper keeps: stderr is
+// handled line by line, so a key split across chunks is still caught before it reaches the log or stderrTail.
 function runCli({ node, argv, cwd, env, stdinText, timeoutMs, logPath, onSpawn, redact = (text) => text, extraFds = [] }) {
   return new Promise((resolve) => {
     let stdout = "";
@@ -1035,13 +1098,15 @@ function runCli({ node, argv, cwd, env, stdinText, timeoutMs, logPath, onSpawn, 
     let killTimer = null;
     let closeTimer = null;
     let child = null;
+    let winDir = null; // Windows: the private dir of the helper's --cmdline-file (the prompt travels in it)
     const finish = () => {
       if (settled) return;
       settled = true;
+      if (winDir) fs.rmSync(winDir, { recursive: true, force: true });
       clearTimeout(timer);
       clearTimeout(killTimer);
       clearTimeout(closeTimer);
-      if (timedOut && child?.pid) killGroup(child.pid, "SIGKILL");
+      if (timedOut && child?.pid) stopChild("SIGKILL");
       keepErr(redact(pendingErr));
       pendingErr = "";
       // A descendant that keeps the pipes open after the CLI exited must not append to the log any more.
@@ -1049,8 +1114,20 @@ function runCli({ node, argv, cwd, env, stdinText, timeoutMs, logPath, onSpawn, 
       child?.stderr?.destroy();
       resolve({ timedOut, spawnError, exitCode, signal, stdout: redact(stdout), stderrTail: stderr.split("\n").slice(-200).join("\n") });
     };
+    // The runner's own child: on Windows child.kill() is TerminateProcess to the helper, which takes the whole job.
+    const stopChild = (signal) => (IS_WIN ? child.kill() : killGroup(child.pid, signal));
     try {
-      child = spawn(node, argv, { cwd, env, detached: true, stdio: [stdinText === null ? "ignore" : "pipe", "pipe", "pipe", ...extraFds] });
+      const stdin = stdinText === null ? "ignore" : "pipe";
+      if (IS_WIN) {
+        const helper = winHelper();
+        if (!helper) throw Object.assign(new Error(`the Windows process helper is unavailable: ${winHelperError()}`), { code: "ESUPERVISOR" });
+        // The executable is found on the CLI environment's PATH, never in the working directory.
+        winDir = fs.mkdtempSync(path.join(os.tmpdir(), "zcode-run-"));
+        const invocation = windowsInvocation([node, ...argv], env, cwd, { cmdlineFile: path.join(winDir, "cmdline.txt") });
+        child = spawn(helper, ["run", ...invocation], { cwd, env, windowsHide: true, stdio: [stdin, "pipe", "pipe"] });
+      } else {
+        child = spawn(node, argv, { cwd, env, detached: true, stdio: [stdin, "pipe", "pipe", ...extraFds] });
+      }
     } catch (error) {
       spawnError = error;
       finish();
@@ -1060,7 +1137,8 @@ function runCli({ node, argv, cwd, env, stdinText, timeoutMs, logPath, onSpawn, 
       spawnError = error;
       finish();
     });
-    if (child.pid) onSpawn?.(child.pid);
+    // onSpawn returns false when the job was cancelled meanwhile: the child is stopped through its own handle.
+    if (child.pid && onSpawn?.(child.pid, IS_WIN ? processStart(child.pid) : null) === false) stopChild("SIGTERM");
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
@@ -1085,9 +1163,9 @@ function runCli({ node, argv, cwd, env, stdinText, timeoutMs, logPath, onSpawn, 
     }
     timer = setTimeout(() => {
       timedOut = true;
-      if (logPath) appendLog(logPath, `timeout after ${timeoutMs} ms: SIGTERM to process group ${child.pid}`);
-      killGroup(child.pid, "SIGTERM");
-      killTimer = setTimeout(() => killGroup(child.pid, "SIGKILL"), TIMEOUT_KILL_GRACE_MS);
+      if (logPath) appendLog(logPath, `timeout after ${timeoutMs} ms: ${IS_WIN ? "TerminateProcess to the process helper" : "SIGTERM to process group"} ${child.pid}`);
+      stopChild("SIGTERM");
+      killTimer = setTimeout(() => stopChild("SIGKILL"), TIMEOUT_KILL_GRACE_MS);
     }, timeoutMs);
     child.on("exit", (code, sig) => {
       exitCode = code;
@@ -1173,11 +1251,21 @@ function checkPromptFile(value) {
     throw new UsageError(`prompt file not found or unreadable: ${file}`);
   }
   if (text.trim().length === 0) throw new UsageError(`prompt file is empty: ${file}`);
-  const bytes = Buffer.byteLength(text);
-  if (PROMPT_TRANSPORT === "argv" && bytes > MAX_PROMPT_BYTES) {
-    throw new UsageError(`prompt file is ${bytes} bytes, above MAX_PROMPT_BYTES=${MAX_PROMPT_BYTES} for the argv transport`);
-  }
+  const tooLong = promptTooLong(text);
+  if (tooLong) throw new UsageError(`prompt file ${tooLong}`);
   return file;
+}
+
+// Why this prompt cannot travel as the -p argument, or null. Windows counts UTF-16 units, plus one per quote and
+// backslash that quoting may double (quoteWindowsArg); elsewhere bytes.
+export function promptTooLong(text, platform = process.platform) {
+  if (PROMPT_TRANSPORT !== "argv") return null;
+  if (platform === "win32") {
+    const units = text.length + (text.match(/["\\]/g) ?? []).length;
+    return units > MAX_PROMPT_UNITS_WIN ? `is ${units} UTF-16 units, above the ${MAX_PROMPT_UNITS_WIN} a Windows command line takes for the argv transport` : null;
+  }
+  const bytes = Buffer.byteLength(text);
+  return bytes > MAX_PROMPT_BYTES ? `is ${bytes} bytes, above MAX_PROMPT_BYTES=${MAX_PROMPT_BYTES} for the argv transport` : null;
 }
 
 function resolveResume(jobsDir, ref, requestedModel) {
@@ -1256,6 +1344,7 @@ async function cmdTask(args) {
       appVersion,
       runnerPid: null,
       childPid: null,
+      childStartedAt: null,
       startedAt: new Date().toISOString(),
       bootId: bootId(),
       finishedAt: null,
@@ -1272,6 +1361,7 @@ async function cmdTask(args) {
       runner = spawn(process.execPath, [SELF, "__run", id, ws.jobsDir, reservation.token], {
         cwd: ws.root,
         detached: true,
+        windowsHide: true,
         stdio: ["ignore", logFd, logFd],
         env: process.env,
       });
@@ -1313,6 +1403,12 @@ async function runJob(id, jobsDir, token) {
       prompt = fs.readFileSync(record.promptFile, "utf8");
     } catch (error) {
       finalizeRecord(file, { status: "failed", errorClass: "launch", note: `cannot read prompt file: ${error.message}` });
+      return 1;
+    }
+    // The file may have grown since task checked it; a truncated prompt is never sent.
+    const tooLong = promptTooLong(prompt);
+    if (tooLong) {
+      finalizeRecord(file, { status: "failed", errorClass: "launch", note: `the prompt ${tooLong}` });
       return 1;
     }
     const model = modelOfRecord(record);
@@ -1363,10 +1459,10 @@ async function runJob(id, jobsDir, token) {
       stdinText: PROMPT_TRANSPORT === "stdin" ? prompt : null,
       timeoutMs: record.timeoutMin * 60_000,
       logPath: log,
-      extraFds: [configLockFd], // fd 3: the CLI keeps the shared config lock, also if this runner dies
-      onSpawn: (pid) => {
-        if (!updateRunning(file, { childPid: pid })) killGroup(pid, "SIGTERM"); // cancelled meanwhile
-      },
+      // fd 3: the CLI keeps the shared config lock, also if this runner dies (POSIX; on Windows the CLI cannot
+      // outlive the runner, see "the config lock")
+      extraFds: [configLockFd],
+      onSpawn: (pid, startedAt) => updateRunning(file, { childPid: pid, childStartedAt: startedAt }) !== null, // false: cancelled meanwhile
     });
     const verdict = evaluate(result);
     const patch = { status: verdict.status, errorClass: verdict.errorClass, exitCode: result.exitCode, signal: result.signal };
@@ -1444,16 +1540,23 @@ async function cmdCancel(args) {
     process.stdout.write(`${record.id} is ${after.status}\n`);
     return 0;
   }
+  const check = IS_WIN ? `tasklist /FI "PID eq ${after.childPid ?? "<pid>"}"` : `ps -g ${after.childPid ?? "<pgid>"}`;
   if (bootOf(record.bootId) !== "current") {
     appendLog(logFile(ws.jobsDir, record.id), `cancel: record set to cancelled; CLI process group ${after.childPid} ${UNKNOWN_BOOT_NOTE}`);
-    process.stdout.write(`cancelled ${record.id} (CLI process group ${after.childPid ?? "-"} ${UNKNOWN_BOOT_NOTE}; check it with: ps -g ${after.childPid ?? "<pgid>"})\n`);
+    process.stdout.write(`cancelled ${record.id} (CLI process group ${after.childPid ?? "-"} ${UNKNOWN_BOOT_NOTE}; check it with: ${check})\n`);
     return 0;
   }
-  appendLog(logFile(ws.jobsDir, record.id), "cancel: record set to cancelled; SIGTERM to the CLI process group");
-  killGroup(after.childPid, "SIGTERM");
+  // On Windows the record must also name the helper's start time: a pid alone may be a stranger's by now.
+  if (IS_WIN && after.childPid && groupAlive(after.childPid, after.childStartedAt) && !after.childStartedAt) {
+    appendLog(logFile(ws.jobsDir, record.id), `cancel: record set to cancelled; process helper ${after.childPid} not stopped: its start time was not recorded`);
+    process.stdout.write(`cancelled ${record.id} (process helper ${after.childPid} not stopped: its start time was not recorded; check it with: ${check})\n`);
+    return 0;
+  }
+  appendLog(logFile(ws.jobsDir, record.id), `cancel: record set to cancelled; ${IS_WIN ? "TerminateProcess to the process helper (the CLI's Job Object)" : "SIGTERM to the CLI process group"}`);
+  killGroup(after.childPid, "SIGTERM", after.childStartedAt);
   const deadline = Date.now() + CANCEL_GRACE_MS;
-  while (groupAlive(after.childPid) && Date.now() < deadline) await sleep(200);
-  if (groupAlive(after.childPid)) killGroup(after.childPid, "SIGKILL");
+  while (groupAlive(after.childPid, after.childStartedAt) && Date.now() < deadline) await sleep(200);
+  if (groupAlive(after.childPid, after.childStartedAt)) killGroup(after.childPid, "SIGKILL", after.childStartedAt);
   process.stdout.write(`cancelled ${record.id}\n`);
   return 0;
 }
@@ -1472,6 +1575,7 @@ async function cmdDoctor(args) {
 
   const platformProblem = configLockProblem();
   if (platformProblem) report("FAIL", "platform", platformProblem);
+  else if (IS_WIN) report("ok", "platform", `win32 (config lock: exclusive file handles; each CLI run in a Job Object of the process helper ${winHelper()}; a stop is TerminateProcess, no polite signal)`);
   else report("ok", "platform", process.platform === "linux" ? "linux (config lock: flock(1))" : process.platform);
   const appVersion = readAppVersion(paths.version);
   if (appVersion) report("ok", "app", `${paths.app} ${appVersion}`);

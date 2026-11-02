@@ -1,6 +1,6 @@
 # Native Windows support for zcode-dispatch — brief for a session on a Windows PC
 
-Status: open. Prerequisite: 0.11.0 (Linux support, branch `feat/zcode-linux`). Written on macOS on 2026-10-20 from source reading only. Nothing here was checked on Windows: every "verify" item has to be run on the Windows machine before code depends on it.
+Status: done in 0.16.0 (2026-11-03): see "Windows" in `docs/zcode-cli-findings.md`. It differs from this brief in two ways. The config lock needs no reader emulation, because a plain open is already a shared holder under share modes. Processes reuse agent-dispatch's process helper (a Job Object per run) instead of `taskkill /T`. Prerequisite: 0.11.0 (Linux support, branch `feat/zcode-linux`). Written on macOS on 2026-10-20 from source reading only. Nothing here was checked on Windows: every "verify" item has to be run on the Windows machine before code depends on it.
 
 ## Goal
 

@@ -128,6 +128,16 @@ check "terminateTree and killTreeSync spare a pid whose start time is not the ex
   const right = await core.terminateTree(sleeper.pid, [["SIGTERM", 2000]], { starts: new Map([[sleeper.pid, core.processStart(sleeper.pid)]]) });
   if (!spared || core.isAlive(sleeper.pid) || right.survivors.length !== 0) { sleeper.kill(); process.exit(1); }'
 
+# A harness argv may carry the whole prompt (kimi's and ZCode's -p): it reaches the helper in --cmdline-file, so only
+# CreateProcess's 32 767 UTF-16 units limit it, not base64 of UTF-8 in the helper's own command line (about 24 000 bytes).
+check "runCli: a 29 000-character Cyrillic argument (58 000 bytes) reaches the harness intact" core '
+  const big = "я".repeat(28990) + "\"\\ \"";
+  const fs = await import("node:fs"); const os = await import("node:os"); const path = await import("node:path");
+  const file = path.join(os.tmpdir(), `core-big-${process.pid}.txt`); fs.writeFileSync(file, big);
+  const s = await core.runCli({ argv: [process.execPath, "-e", "process.stdout.write(String(process.argv[1] === require(\"node:fs\").readFileSync(0, \"utf8\")))", big], cwd: process.cwd(), env: process.env, stdinPath: file, timeoutMs: 60000 });
+  fs.rmSync(file, { force: true });
+  if (s.spawnError || s.stdout.trim() !== "true") { console.error(s.spawnError, s.stdout); process.exit(1); }'
+
 echo "test-agent-core-windows: boundedExec"
 check "argv reaches the command unchanged (spaces, quotes, backslashes, empty, unicode)" core '
   const args = ["plain", "two words", "", "a\"b", "c:\\dir\\", "tail\\\\\"q", "ёлка 🌲", "%PATH%", "x & y | z"];
