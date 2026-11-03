@@ -296,7 +296,7 @@ EOF
     d="$JOBS/$ID"
     sid="$(jobf "$ID" r.sessionId)"
     exp="$(jarr -p --output-format json --setting-sources user --settings "$d/settings.json" --model opus --effort xhigh \
-        --tools Bash,Read,Edit,Write,Glob,Grep --strict-mcp-config --disable-slash-commands --append-system-prompt-file "$d/system.md" \
+        --tools Bash,Read,Edit,Write,Glob,Grep --allowedTools Bash,Read,Edit,Write,Glob,Grep --strict-mcp-config --disable-slash-commands --append-system-prompt-file "$d/system.md" \
         --session-id "$sid" --permission-mode bypassPermissions)"
     got="$(jget "$REC" r.argv)"
     [[ "$st" == completed && "$got" == "$exp" && "$sid" =~ ^[0-9a-f-]{36}$ && "$(jget "$REC" r.stdin)" == "$(cat "$PROMPT")" && "$(jget "$REC" r.cwd)" == "$repo" ]]
@@ -373,7 +373,7 @@ EOF
     d="$JOBS/$ID"
     sid="$(jobf "$ID" r.sessionId)"
     exp="$(jarr -p --output-format json --setting-sources "" --settings "$d/settings.json" --model "glm-5.3[1m]" --effort max \
-        --tools Bash,Read,Edit,Write,Glob,Grep --strict-mcp-config --disable-slash-commands --append-system-prompt-file "$d/system.md" \
+        --tools Bash,Read,Edit,Write,Glob,Grep --allowedTools Bash,Read,Edit,Write,Glob,Grep --strict-mcp-config --disable-slash-commands --append-system-prompt-file "$d/system.md" \
         --session-id "$sid" --permission-mode bypassPermissions)"
     got="$(jget "$REC" r.argv)"
     [[ "$st" == completed && "$got" == "$exp" ]]
@@ -445,10 +445,11 @@ EOF
     d="$JOBS/$ID"
     got="$(jget "$d/settings.json" r)"
     exp='{"disableAllHooks":false,"permissions":{"deny":["WebSearch"],"allow":["Bash(npm test:*)"]},"env":{"FOO_SETTING":"bar","CLAUDE_CODE_SUBPROCESS_ENV_SCRUB":"1","ANTHROPIC_BASE_URL":"https://api.example.test/anthropic"}}'
-    [[ "$st" == completed && "$got" == "$exp" && "$(jget "$REC" 'r.argv[r.argv.indexOf("--tools") + 1]')" == Bash,Read && "$(jget "$REC" 'r.argv.slice(-2).join(" ")')" == "--max-turns 7" \
+    [[ "$st" == completed && "$got" == "$exp" && "$(jget "$REC" 'r.argv[r.argv.indexOf("--tools") + 1]')" == Bash,Read && "$(jget "$REC" 'r.argv[r.argv.indexOf("--allowedTools") + 1]')" == Bash,Read \
+        && "$(jget "$REC" 'r.argv.slice(-2).join(" ")')" == "--max-turns 7" \
         && "$(jget "$REC.claude.json" r.baseUrl)" == https://api.example.test/anthropic && "$(jget "$REC.claude.json" r.headers)" == '["authorization"]' \
         && "$(jget "$REC.claude.json" r.bash)" == '{"npm test":"allow"}' ]]
-    verdict "3 options: tools and maxTurns for the writer; settings merge (arrays replace, null removes) but group A wins (env, apiKeyHelper)" $? "st=$st" "got: $got" "exp: $exp" "bash: $(jget "$REC.claude.json" r.bash)"
+    verdict "3 options: tools (also as --allowedTools) and maxTurns for the writer; settings merge (arrays replace, null removes) but group A wins (env, apiKeyHelper)" $? "st=$st" "got: $got" "exp: $exp" "bash: $(jget "$REC.claude.json" r.bash)"
     task_on copt opt-r 'AGENT_STUB_BASH_PROBE=["npm test","npm test -- --watch","git diff HEAD"]'
     st="$(wait_job "$ID")"
     [[ "$st" == completed && "$(jget "$REC" 'r.argv[r.argv.indexOf("--tools") + 1]')" == Read,Glob,Grep,Bash && "$(jget "$REC" 'r.argv.slice(-2).join(" ")')" == "--max-turns 7" ]]
@@ -463,8 +464,9 @@ EOF
     st="$(wait_job "$ID")"
     got="$(jget "$JOBS/$ID/settings.json" r.sandbox)"
     exp='{"enabled":true,"autoAllowBashIfSandboxed":true,"network":{"allowedDomains":["registry.npmjs.org"]},"credentials":{"envVars":[{"name":"OTHER_SECRET","mode":"deny"},{"name":"ANTHROPIC_AUTH_TOKEN","mode":"deny"}]},"failIfUnavailable":true,"allowUnsandboxedCommands":false}'
-    [[ "$st" == completed && "$got" == "$exp" && "$(jget "$REC" 'r.argv[r.argv.indexOf("--permission-mode") + 1]')" == acceptEdits ]]
-    verdict "4 native writer: acceptEdits; sandbox enabled, failIfUnavailable, no unsandboxed retry, auto-allow, the key variable denied (user entries kept)" $? "got: $got" "exp: $exp"
+    [[ "$st" == completed && "$got" == "$exp" && "$(jget "$REC" 'r.argv[r.argv.indexOf("--permission-mode") + 1]')" == acceptEdits \
+        && "$(jget "$REC" 'r.argv[r.argv.indexOf("--allowedTools") + 1]')" == Bash,Read,Edit,Write,Glob,Grep ]]
+    verdict "4 native writer: acceptEdits, writer tools as --allowedTools; sandbox enabled, failIfUnavailable, no unsandboxed retry, auto-allow, the key variable denied (user entries kept)" $? "got: $got" "exp: $exp"
     task_on cnat nat-r 'AGENT_STUB_BASH_PROBE=["touch x","git status"]'
     st="$(wait_job "$ID")"
     [[ "$st" == completed && "$(jget "$JOBS/$ID/settings.json" r.sandbox.autoAllowBashIfSandboxed)" == false && "$(jget "$JOBS/$ID/settings.json" r.sandbox.enabled)" == true \

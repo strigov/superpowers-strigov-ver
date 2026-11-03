@@ -2,6 +2,7 @@
   "version": 1,
   "profiles": {
     "glm":           { "harness": "zcode", "auth": "native", "shares": "zai-coding-plan", "maxParallel": 2 },
+    "glm-pro":       { "harness": "zcode", "auth": "native", "model": "GLM-5.3", "shares": "zai-coding-plan", "maxParallel": 2 },
     "luna":          { "harness": "codex", "auth": "login", "model": "gpt-6-luna",  "effort": "max" },
     "sol":           { "harness": "codex", "auth": "login", "model": "gpt-6.1-sol", "effort": "xhigh" },
     "astra":         { "harness": "codex", "auth": "login", "model": "gpt-6-astra", "effort": "xhigh" },
@@ -70,6 +71,15 @@
       "harness": "claude", "auth": { "key": "kimi" },
       "endpoint": "https://api.moonshot.ai/anthropic", "model": "kimi-k3[1m]"
     },
+    "claude-kimi-code": {
+      "harness": "claude", "auth": { "key": "kimi-code" }, "authHeader": "x-api-key",
+      "endpoint": "https://api.kimi.ai/coding/", "model": "k3.1-pro",
+      "env": {
+        "CLAUDE_CODE_EFFORT_LEVEL": "max",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "262144",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "262144"
+      }
+    },
     "claude-minimax": {
       "harness": "claude", "auth": { "key": "minimax" },
       "endpoint": "https://api.minimax.io/anthropic", "model": "MiniMax-M3.1-Flash[1m]",
@@ -98,11 +108,20 @@
     "dsh-deepseek": {
       "harness": "dsh", "auth": { "key": "deepseek" }, "model": "deepseek-v4-pro", "effort": "high"
     },
+    "kimi-code": {
+      "harness": "kimi", "auth": { "key": "kimi-code" }, "model": "k3.1-pro"
+    },
     "opencode-login": {
       "harness": "opencode", "auth": "login", "model": "<provider/model>"
     },
     "opencode-key": {
       "harness": "opencode", "auth": { "key": "<name>" }, "keyVar": "<VAR>", "model": "<provider/model>"
+    },
+    "opencode-go": {
+      "harness": "opencode", "auth": { "key": "opencode-go" }, "keyVar": "OPENCODE_API_KEY", "model": "opencode-go/<model>"
+    },
+    "opencode-deepinfra": {
+      "harness": "opencode", "auth": { "key": "deepinfra" }, "keyVar": "DEEPINFRA_API_KEY", "model": "deepinfra/zai-org/GLM-5.3"
     },
     "pi-key": {
       "harness": "pi", "auth": { "key": "<name>" }, "keyVar": "<VAR>", "model": "<provider/id>"

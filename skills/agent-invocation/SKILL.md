@@ -1,6 +1,6 @@
 ---
 name: agent-invocation
-description: How to route pipeline roles through agent-dispatch profiles and run headless coding-agent harnesses (claude -p, OpenCode, pi, DeepSeek Harness dsh) as background jobs — $AD resolution, route, task/status/result/cancel, the Monitor loop by id prefix, failure classes, headless preambles, in-session roles on external profiles. Read this before the first $AD call in a session, including from dev-orchestrator.
+description: How to route pipeline roles through agent-dispatch profiles and run headless coding-agent harnesses (claude -p, OpenCode, pi, DeepSeek Harness dsh, Kimi Code CLI) as background jobs — $AD resolution, route, task/status/result/cancel, the Monitor loop by id prefix, failure classes, headless preambles, in-session roles on external profiles. Read this before the first $AD call in a session, including from dev-orchestrator.
 disable-model-invocation: true
 ---
 
@@ -8,15 +8,15 @@ disable-model-invocation: true
 
 > **Manual-only pipeline skill (superpowers-strigov-ver).** It starts only from the user (`/dev`, `/superpowers-strigov-ver:<skill>`), from another skill of this plugin, or when resuming an in-progress plan — never on your own initiative. The Skill tool refuses it by design, so this plugin's pipeline skills are loaded with `Read`, never through the Skill tool. This file: `${CLAUDE_SKILL_DIR}/SKILL.md` (if the variable shows unexpanded, it is the path you just read). Another skill named below (`writing-plans`, `codex-invocation`, `zcode-invocation`, `dev-orchestrator`, …) is `../<name>/SKILL.md` relative to this skill's directory — `Read` it there. After a context compaction, re-`Read` this file before your next step.
 
-> GLM through Z.ai's ZCode CLI and the Codex models (Luna, Sol, Astra) keep their own wrappers and skills: `Read` `../zcode-invocation/SKILL.md` and `../codex-invocation/SKILL.md` (manual-only; never through the Skill tool). This skill covers `agent-dispatch` itself: role routing, profiles, and jobs on the headless harnesses `claude -p`, OpenCode, pi and DeepSeek Harness (`dsh`).
+> GLM through Z.ai's ZCode CLI and the Codex models (Luna, Sol, Astra) keep their own wrappers and skills: `Read` `../zcode-invocation/SKILL.md` and `../codex-invocation/SKILL.md` (manual-only; never through the Skill tool). This skill covers `agent-dispatch` itself: role routing, profiles, and jobs on the headless harnesses `claude -p`, OpenCode, pi, DeepSeek Harness (`dsh`) and Kimi Code CLI (`kimi`).
 
 ## What this is
 
 `bin/agent-dispatch` runs the profile a pipeline role is bound to. A **profile** is a harness, a way to pay (the harness's own login or an API key), a model, an effort and options. A **role** (`implementer`, `plan-reviewer`, …) has a **chain** of profiles: the first is the primary, the rest are fallbacks in order. The **channel** is the profile currently running a role.
 
 - The user's profiles and roles live in `~/.claude/plugins/data/superpowers-strigov-ver-agents/config.json` (no secrets; keys sit in `keys/<name>`, mode 0600). **No file → the built-in scheme**, which is the dev-orchestrator Model split table, unchanged. A role in the file replaces that role's built-in chain; every other role stays built-in.
-- Built-in profiles: `glm` (harness `zcode`, GLM-5.3-Flash `max`), `luna` (`codex`, `gpt-6-luna` `max`), `sol` (`codex`, `gpt-6.1-sol` `xhigh`), `astra` (`codex`, `gpt-6-astra` `xhigh`), `astra-high` (`codex`, `gpt-6-astra` `high`), `opus-xhigh`, `opus-high`, `sonnet-medium` (harness `inproc`). They cannot be redefined.
-- `zcode` and `codex` profiles are **passed through** to `zcode-dispatch` / `codex-dispatch`: the same argv, the same `zt-…` / `task-…` ids, job stores, refusals and exit codes. Core harnesses run as background jobs of `agent-dispatch` itself, with ids `ct-NNNN` (claude), `oc-NNNN` (opencode), `pi-NNNN` (pi), `dt-NNNN` (dsh). `inproc` profiles are Claude subagents of the session (Agent tool); `task` refuses them (exit 2).
+- Built-in profiles: `glm` (harness `zcode`, GLM-5.3-Flash `max`), `glm-pro` (`zcode`, GLM-5.3 `max`, the same Coding Plan: `shares: zai-coding-plan`; in no built-in chain), `luna` (`codex`, `gpt-6-luna` `max`), `sol` (`codex`, `gpt-6.1-sol` `xhigh`), `astra` (`codex`, `gpt-6-astra` `xhigh`), `astra-high` (`codex`, `gpt-6-astra` `high`), `opus-xhigh`, `opus-high`, `sonnet-medium` (harness `inproc`). They cannot be redefined.
+- `zcode` and `codex` profiles are **passed through** to `zcode-dispatch` / `codex-dispatch`: the same argv, the same `zt-…` / `task-…` ids, job stores, refusals and exit codes. Core harnesses run as background jobs of `agent-dispatch` itself, with ids `ct-NNNN` (claude), `oc-NNNN` (opencode), `pi-NNNN` (pi), `dt-NNNN` (dsh), `ki-NNNN` (kimi). `inproc` profiles are Claude subagents of the session (Agent tool); `task` refuses them (exit 2).
 - Profiles, keys, logins and `config.json` belong to the user. The orchestrator never edits `config.json`, never runs `key set`, `profile add` or a harness login, never asks for a key in the chat, and never runs `doctor --probe` (one paid request) unless the user asks for it.
 
 ## Working path
@@ -59,9 +59,9 @@ The same idiom as `$DISPATCH` (`codex-invocation`) and `$ZDISPATCH` (`zcode-invo
 | `harness=` | Command | Poll · result · cancel |
 |---|---|---|
 | `inproc` | `Agent(subagent_type="general-purpose", model=<model>, effort=<effort>, ...)` | Agent completion |
-| `zcode` | `"$ZDISPATCH" task --background [--cwd W] [--resume-task zt-N \| --fresh] --prompt-file F` — no model flags (`zcode-invocation`) | `$ZDISPATCH` |
+| `zcode` | `"$ZDISPATCH" task --background [--model GLM-5.3] [--cwd W] [--resume-task zt-N \| --fresh] --prompt-file F` — `--model GLM-5.3` when the route line says `model=GLM-5.3` (`glm-pro`), no model flag for `glm` (`zcode-invocation`) | `$ZDISPATCH` |
 | `codex` | `"$DISPATCH" task --background [--write] --model <model> --effort <effort> [--cwd W] [--resume-task task-… \| --fresh] --prompt-file F` (`codex-invocation`) | `$DISPATCH` |
-| `claude`, `opencode`, `pi`, `dsh` | `"$AD" task --profile <profile> --role <role> --background [--write] [--cwd W] [--resume-task <id> \| --fresh] --prompt-file F` | `$AD` |
+| `claude`, `opencode`, `pi`, `dsh`, `kimi` | `"$AD" task --profile <profile> --role <role> --background [--write] [--cwd W] [--resume-task <id> \| --fresh] --prompt-file F` | `$AD` |
 
 `"$AD" task --profile <p>` on a `zcode` or `codex` profile runs exactly the wrapper command of this table (pass-through; `--write`, `--profile` and `--role` never reach `zcode-dispatch`, which has no read-only mode — without `--write`, `agent-dispatch` prints one WARN line about it), so either form is valid; dev-orchestrator writes the wrapper form. A reviewer on `zcode` uses the same `task` line (it runs with write access and takes the ZCode reservation), the reviewer preamble below and "## No-edit check". `--write` marks a role that writes files or runs the project's commands — the implementers and every in-session role except `diagnosis` and `final-review` ("## In-session roles on an external profile" item 2); without it the harness runs read-only, and `"$AD" task --role` prints one WARN line when the flag disagrees with the role (not on `zcode`, which always writes). Every prompt goes through `--prompt-file` — never inline.
 
@@ -162,7 +162,7 @@ The failure rules depend on the job's harness (dev-orchestrator Step 3, "GLM inf
 
 Prepend the block verbatim to every dispatch file of its kind; replace `[REPORT_FILE]` with the absolute path the template uses. A `glm` implementer gets the ZCode preamble (`../dev-orchestrator/implementer-prompt.md`) instead of the implementer preamble; a `glm` reviewer gets the reviewer preamble; `codex` and `inproc` dispatches get neither block. An in-session role on an external profile gets the block "## In-session roles on an external profile" names.
 
-**Implementer preamble** — every implementer dispatch (`implement`, `fix`, `gatefix`, `final-fix`, `repair`, follow-ups) on `claude`, `opencode`, `pi` or `dsh`:
+**Implementer preamble** — every implementer dispatch (`implement`, `fix`, `gatefix`, `final-fix`, `repair`, follow-ups) on `claude`, `opencode`, `pi`, `dsh` or `kimi`:
 
 ```
 ## Headless run — read this first
@@ -206,7 +206,7 @@ Prepend the block verbatim to every dispatch file of its kind; replace `[REPORT_
 9. **`frontend.*` is an implementer:** dev-orchestrator Step 3 "Prompt files" — body `$dir/prompts/<name>.md` (`implement-<id>-r1`: the first-round template; `fix-<id>-r<N>` / `gatefix-<id>-r<N>`: the follow-up template; no plan file — a pure frontend task from Triage: `$dir` is `"$WS"` without an argument), dispatch file `<name>.<seq>.<profile>.md` holding the preamble, then the body (every frontend dispatch except item 2's verdict re-dispatch is FRESH, and its templates are self-contained: no re-brief; a switch adds the channel-switch notice after the body's opening paragraph), the `.id` sidecar, `impl=<profile>:<id>`. The Step 2.5 compaction-safe guards and admission condition (dev-orchestrator Pre-dispatch checklist item 5) are not checked for it: Step 2.5 runs them before non-frontend implementer dispatches only. A frontend sidecar's chain is its `frontend.*` role — the one whose chain lists the sidecar's profile, `frontend.new-ui` first — never `implementer.escalation`.
 10. **Reading dev-orchestrator.** For these roles its "Opus subagent", "Sonnet subagent", "Claude frontend implementer", "fresh Agent call" and "Agent completion" mean the routed profile's dispatch above. "Never GLM or Codex" for a frontend phase means its fixes never leave its `frontend.*` role for the `implementer` / `implementer.escalation` chains; the BLOCKED "Sonnet → Opus" upgrade is `frontend.tweak` → `frontend.new-ui`, and a phase already on `frontend.new-ui` goes to the user.
 
-**Session-role preamble** — every external dispatch of an in-session role other than `frontend.*` and `final-review`, on `claude`, `opencode`, `pi`, `dsh` or `zcode`:
+**Session-role preamble** — every external dispatch of an in-session role other than `frontend.*` and `final-review`, on `claude`, `opencode`, `pi`, `dsh`, `kimi` or `zcode`:
 
 ```
 ## Headless run — read this first
@@ -256,6 +256,7 @@ Every job of a `run` role (`gate`, `phase-review`, `phase-review.escalated`, `in
 | `opencode` | a `completed` `oc-` job of the same profile; the same `--dir` and profile directory | its own reviewer agent: read, grep, glob, list and read-only git |
 | `pi` | a `completed` `pi-` job of the same profile; the same `cwd` and session file | `read,grep,find,ls` — **no git**: the review package is the reviewer's only source of the diff |
 | `dsh` | a `completed` `dt-` job of the same profile; the same `cwd` | the `read-only` permission mode |
+| `kimi` | a `completed` writer `ki-` job of the same profile; the same `cwd` and home. A read-only job never resumes (kimi refuses `--agent-file` with `--session`): its follow-ups go FRESH | an agent file allowing `Read`, `Glob`, `Grep` only — **no git**: the review package is the reviewer's only source of the diff |
 
 Ids never cross harnesses. A core id resumes only on its own profile; a refused resume or `resume-lost` → FRESH on the same profile. Reviewers stay FRESH every round wherever dev-orchestrator says so, whatever the harness.
 
@@ -270,7 +271,7 @@ The per-harness facts the orchestrator relies on are in "Resume and read-only, b
 
 ## Never do
 
-- Run a harness CLI (`claude -p`, `opencode`, `pi`, `dsh`, `zcode`, `codex exec`) directly — `$AD` and the two wrappers guarantee the environment allowlist, the key handling, the write reservation, the job record and the signal ladder.
+- Run a harness CLI (`claude -p`, `opencode`, `pi`, `dsh`, `kimi`, `zcode`, `codex exec`) directly — `$AD` and the two wrappers guarantee the environment allowlist, the key handling, the write reservation, the job record and the signal ladder.
 - Read, print or copy a key: `keys/`, `config.json` key sources, a harness's own credential store. Never ask for a key in the chat or pass one as an argument; the user runs `key set` in their own terminal.
 - Edit `config.json`, add or change profiles, or log in to a harness on the user's behalf.
 - Dispatch on a profile other than the one `route` printed for the dispatch or switch, the phase's current channel, or the `SP_IMPLEMENTER` profile (dev-orchestrator ladder item 1, its details from `"$AD" channels`), or switch profiles silently — every switch is one announced line.

@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img alt="Версия 0.13.0" src="https://img.shields.io/badge/version-0.13.0-7c8cff?style=flat-square">
+  <img alt="Версия 0.16.0" src="https://img.shields.io/badge/version-0.16.0-7c8cff?style=flat-square">
   <img alt="Плагин Claude Code" src="https://img.shields.io/badge/Claude_Code-plugin-d97757?style=flat-square">
   <img alt="Лицензия MIT" src="https://img.shields.io/badge/license-MIT-35d6a6?style=flat-square">
 </p>
@@ -37,7 +37,9 @@ codex login
 
 Codex нужен только встроенной схеме. Если аккаунта OpenAI нет, не ставьте его, но до первого запуска пайплайна назначьте свои профили всем ролям, во встроенной цепочке которых есть профиль Codex (`plan-reviewer`, `spec-reviewer`, `implementer`, `implementer.risk`, `implementer.escalation`, `control-review`, `final-review`, `adhoc-review`): см. [Маршрутизация ролей](#маршрутизация-ролей), пример для тех, у кого нет OpenAI. Тогда `agent-dispatch doctor` покажет неиспользуемые профили Codex как WARN, а не FAIL.
 
-Необязательно — имплементер по умолчанию, **GLM-5.3-Flash через ZCode от Z.ai**: установите [ZCode](https://github.com/zai-org/ZCode) — macOS: ZCode.app в `/Applications`; Linux: см. [Linux: ZCode для канала GLM](#linux-zcode-для-канала-glm) ниже; Windows пока не поддерживается — и один раз сохраните API-ключ GLM Coding Plan со страницы <https://z.ai/manage-apikey/apikey-list>: выполните в терминале `zcode-dispatch api-key set` и вставьте ключ в скрытое приглашение. Ключ станет провайдером собственного шаблона ZCode «Z.ai Coding Plan» в приватном конфиге обёртки и не истекает. OAuth-входа нет: `zcode login` в CLI не хранит refresh-токен и живёт около часа (подробности — в скилле `zcode-invocation`, раздел «One-time setup»). Без ключа `zcode-dispatch doctor` не проходит, и пайплайн реализует фазы на Codex Luna `max` — с объявлением, никогда молча. За локальным прокси экспортируйте `ZCODE_HTTP_PROXY=http://<host>:<port>`, если фоновые запуски падают с сетевой ошибкой (CLI игнорирует `HTTP(S)_PROXY` и системный прокси macOS; обёртка передаёт эту переменную через белый список). CLI получает окружение по белому списку; дополнительные переменные можно явно передать через `ZCODE_ENV_PASSTHROUGH="NAME1,NAME2"`.
+Необязательно — имплементер по умолчанию, **GLM-5.3-Flash через ZCode от Z.ai**: установите [ZCode](https://github.com/zai-org/ZCode) — macOS: ZCode.app в `/Applications`; Linux: см. [Linux: ZCode для канала GLM](#linux-zcode-для-канала-glm) ниже; Windows: установщик Z.ai с <https://zcode.z.ai> (ставит в `%LOCALAPPDATA%\Programs\ZCode`), см. [Windows](#windows) ниже — и один раз сохраните API-ключ GLM Coding Plan со страницы <https://z.ai/manage-apikey/apikey-list>: выполните в терминале `zcode-dispatch api-key set` и вставьте ключ в скрытое приглашение. Ключ станет провайдером собственного шаблона ZCode «Z.ai Coding Plan» в приватном конфиге обёртки и не истекает. OAuth-входа нет: `zcode login` в CLI не хранит refresh-токен и живёт около часа (подробности — в скилле `zcode-invocation`, раздел «One-time setup»). Без ключа `zcode-dispatch doctor` не проходит, и пайплайн реализует фазы на Codex Luna `max` — с объявлением, никогда молча. За локальным прокси экспортируйте `ZCODE_HTTP_PROXY=http://<host>:<port>`, если фоновые запуски падают с сетевой ошибкой (CLI игнорирует `HTTP(S)_PROXY` и системный прокси macOS; обёртка передаёт эту переменную через белый список). CLI получает окружение по белому списку; дополнительные переменные можно явно передать через `ZCODE_ENV_PASSTHROUGH="NAME1,NAME2"`.
+
+Большая **GLM-5.3** работает на том же ключе и том же Coding Plan через встроенный профиль `glm-pro` (`zcode-dispatch task --model GLM-5.3`). По умолчанию на неё ничего не маршрутизируется: впишите её в роль своего `config.json`, например `"implementer": ["glm-pro", "glm", "luna"]`. `api-key set` сохраняет ключ для обеих моделей; ключ, сохранённый до 0.14.0, становится доступен GLM-5.3 командой `zcode-dispatch api-key sync` (ключ вводить не нужно). Проверка: `zcode-dispatch doctor --probe --model GLM-5.3`. Оба профиля тратят одну квоту (`shares: zai-coding-plan`), GLM-5.3 быстрее, чем Flash, и `quota` на одном снимает оба.
 
 #### Linux: ZCode для канала GLM
 
@@ -156,8 +158,14 @@ Companion runtime уже вендорится. Отдельный Claude Code-п
 - Харнесс должен быть `.exe`. Нативный установщик Claude Code даёт `claude.exe`. npm-обёртку `.cmd` (`opencode.cmd`, `pi.cmd`) без оболочки не запустить, поэтому укажите в `bin` профиля настоящий исполняемый файл. Пока на Windows проверен только адаптер `claude`.
 - `"sandbox": "native"` недоступен (`doctor` — FAIL).
 - Права файлов не применяются. Каталог данных в `%USERPROFILE%\.claude` закрыт ACL профиля пользователя.
-- Сквозной вызов Codex запускает `codex-dispatch` через Git Bash. ZCode (`glm`) на Windows пока не поддерживается.
+- Сквозной вызов Codex запускает `codex-dispatch` через Git Bash, и сквозной вызов ZCode (`glm`, `glm-pro`, с 0.16.0) — тоже: см. ниже.
 - Ключи сохраняйте из PowerShell или cmd: `node <плагин>\bin\lib\agent-dispatch.mjs key set <имя>`, затем вставьте ключ в скрытое приглашение. Терминал Git Bash для Node не консоль, поэтому скрыть ввод там нельзя.
+
+**ZCode на Windows (0.16.0).** GLM-5.3-Flash (`glm`) и GLM-5.3 (`glm-pro`) работают нативно. Проверено на Windows 11 с ZCode 3.17.1 (CLI 0.17.1) и Node 22: `doctor --probe` на обеих моделях, фоновая задача с вызовами инструментов, раунд `--resume-task` и модель в собственном логе CLI. ZCode ставится установщиком Z.ai с <https://zcode.z.ai> в `%LOCALAPPDATA%\Programs\ZCode` — это путь обёртки по умолчанию (для другого места — `ZCODE_APP`). CLI `resources\glm\zcode.cjs` запускается под `node` из `PATH`. Ключ Coding Plan сохраняйте из PowerShell или cmd: `node <плагин>\bin\lib\zcode-dispatch.mjs api-key set`. Дальше:
+
+- Каждый запуск CLI идёт в собственном Job Object того же хелпера. Отмена или таймаут — один `TerminateProcess` на всё дерево, а погибший runner забирает CLI с собой. Сохранить сессию при отмене ZCode не успевает, но отменённую задачу и так никогда не продолжают.
+- Блокировка конфига сделана на режимах общего доступа Windows. Запуск держит файл конфига открытым в общем режиме, а `api-key set` / `sync` / `clear` нужен эксклюзивный доступ, поэтому, пока идёт запуск, они ждут и отказывают. pid не участвует.
+- Промпт передаётся в командной строке, как на macOS и Linux. Windows принимает около 30 000 символов (единиц UTF-16). Более длинный промпт отклоняется при постановке задачи, и оркестратор объявленно отдаёт его Luna с нуля.
 
 ### Профиль за три шага
 
@@ -172,7 +180,7 @@ agent-dispatch doctor --profile deepseek-claude --probe             # 3. про�
 2. Ключ вы кладёте сами, в своём терминале: `key set <имя>` запрашивает его скрытым вводом. Из сессии Claude Code ключ можно передать через pipe: `! pbpaste | agent-dispatch key set <имя>`, на Linux — `wl-paste` или `xclip -o -selection clipboard`. Ключ, переданный аргументом, отвергается. Профиль с `login` пользуется собственным входом харнесса. Для профиля с отдельным изолированным каталогом войдите в нём так: `agent-dispatch profile env <имя> -- <команда входа>` — `-- opencode auth login`, или `-- claude`, затем `/login`, или `-- pi`, затем `/login`.
 3. `doctor --profile <имя>` проверяет всё, что можно проверить без вызова модели. `--probe` добавляет один короткий платный запрос на вашем ключе или подписке; его запускаете вы, пайплайн — никогда.
 
-Все пресеты рассчитаны на `claude`, `dsh`, OpenCode или pi, а в 0.12.0 есть адаптеры всех четырёх, поэтому профиль из пресета готов к работе, как только проходит `doctor`. Профили на других харнессах пишутся вручную: другая модель или effort Codex либо другая модель Claude в сессии. Например, более дешёвое контрольное ревью и автор плана на Sonnet:
+Все пресеты рассчитаны на `claude`, `dsh`, OpenCode, pi или `kimi`, и адаптеры есть у всех пяти (`kimi` — с 0.15.0), поэтому профиль из пресета готов к работе, как только проходит `doctor`. Профили на других харнессах пишутся вручную: другая модель или effort Codex либо другая модель Claude в сессии. Например, более дешёвое контрольное ревью и автор плана на Sonnet:
 
 ```json
 {
@@ -227,15 +235,17 @@ agent-dispatch doctor --profile deepseek-claude --probe             # 3. про�
 | `claude-zai` | `zai` | `https://api.z.ai/api/anthropic` | `glm-5.3[1m]` | `API_TIMEOUT_MS=3000000`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000`; `shares: zai-coding-plan` |
 | `claude-deepseek` | `deepseek` | `https://api.deepseek.com/anthropic` | `deepseek-v4-pro[1m]` | `CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432` |
 | `claude-kimi` (Kimi Platform) | `kimi` | `https://api.moonshot.ai/anthropic` | `kimi-k3[1m]` | — |
+| `claude-kimi-code` (ключ подписки Kimi Code) | `kimi-code` | `https://api.kimi.ai/coding/` | `k3.1-pro`; для K2.8 Preview — `--model kimi-k2.8-preview` | `authHeader: x-api-key`, `CLAUDE_CODE_EFFORT_LEVEL=max`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW=262144`, `CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144` |
 | `claude-minimax` | `minimax` | `https://api.minimax.io/anthropic` | `MiniMax-M3.1-Flash[1m]` | `CLAUDE_CODE_AUTO_COMPACT_WINDOW=524288` |
 | `claude-alibaba` (pay-as-you-go) | `alibaba` | `https://<WorkspaceId>.<region>.maas.aliyuncs.com/apps/anthropic`, `<region>` — один из `ap-southeast-1`, `us-east-1`, `eu-central-1`, `ap-northeast-1`, `cn-beijing` | `<model>`, например `qwen3.8-max` | эндпоинт задаётся через `--set endpoint=…` |
 | `claude-openrouter` | `openrouter` | `https://openrouter.ai/api` | `<model>` | ключ Bearer, `ANTHROPIC_API_KEY=""` |
 
 - `[1m]` сообщает Claude Code, что у модели окно 1M; для незнакомого id он считает 200K.
 - Z.ai: на этом эндпоинте тариф определяется типом ключа (Coding Plan или Standard API) ([06 §1.3](./docs/research/universal-dispatchers/06-providers-and-plans.md)). `shares: zai-coding-plan` — для ключа Coding Plan, это квота встроенного `glm`; для ключа Standard уберите метку: `--set shares=`.
+- Kimi Code: ключ из консоли Kimi Code тратит квоту подписки (5-часовое окно). Две модели на одном ключе — два профиля: `profile add kimi-code --from claude-kimi-code` и `profile add kimi-k28 --from claude-kimi-code --model kimi-k2.8-preview`. Ключ у них общий, поэтому `quota` на одном снимает оба, и роль переходит к следующему профилю цепочки. Правила сообщества Kimi называют подписку «for interactive use only» ([07 KI1](./docs/research/universal-dispatchers/07-tos-matrix.md)): фоновый запуск на ней — ваше решение.
 - Kimi Platform на Tier 0 пропускает один запрос за раз: добавьте `--set maxParallel=1`. `task` проверяет `maxParallel` у профилей claude, opencode, pi и dsh; у профиля codex или zcode его соблюдают только параллельные треки пайплайна, и не в роли профиля из `SP_IMPLEMENTER` (две отдельные сессии или ручные вызовы `task` тоже не учитываются).
 - `effort` идёт в `--effort` и в `CLAUDE_CODE_EFFORT_LEVEL`; `CLAUDE_CODE_EFFORT_LEVEL` в `env` профиля (рецепты некоторых провайдеров ставят `max`) перекрывает поле `effort`.
-- Опции: `options.tools` (набор инструментов пишущей роли, по умолчанию `Bash,Read,Edit,Write,Glob,Grep`), `options.settings` (сливается с `--settings` задачи), `options.maxTurns`.
+- Опции: `options.tools` (набор инструментов пишущей роли, по умолчанию `Bash,Read,Edit,Write,Glob,Grep`; уходит и в `--tools`, и в `--allowedTools`: при `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` Claude Code иначе принудительно включает режим разрешений default), `options.settings` (сливается с `--settings` задачи), `options.maxTurns`.
 - Ревьюер получает Read, Glob, Grep и команды только для чтения: `git show`, `git diff`, `git log`, `git status`. Ключ не доходит до Bash модели (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`).
 
 **Локальная модель.** `agent-dispatch profile add local --from claude-local --set endpoint=http://127.0.0.1:<порт> --model <id> --set env.CLAUDE_CODE_MAX_CONTEXT_TOKENS=<ctx>`, порт вашего сервера: llama-server 9931, LM Studio 1234, Ollama 11434 ([08 §3](./docs/research/universal-dispatchers/08-local-models.md)). Пресет запускает одну задачу за раз (`maxParallel: 1`), увеличивает тайм-ауты простоя потока Claude Code, чтобы их хватало на долгий prefill, и выключает блок атрибуции, который мешает серверу переиспользовать кэш промпта между задачами.
@@ -251,6 +261,8 @@ agent-dispatch doctor --profile deepseek-claude --probe             # 3. про�
 | Установка | `npm i -g opencode-ai@1.19.3` или `brew install anomalyco/tap/opencode`. Не `brew install opencode`: это OpenCode 2, адаптер его отвергает с подсказкой поставить v1. Поддерживается 1.19.x |
 | Вход | Пресет `opencode-login` (`"auth": "login"`): `opencode auth login` → GitHub Copilot, ChatGPT Plus/Pro, OpenCode Go или GLM Coding Plan (провайдеры `github-copilot`, `openai`, `opencode-go`, `zai-coding-plan`); модель — `--model <provider>/<model>`. Вход GLM Coding Plan тратит квоту встроенного `glm`: добавьте `--set shares=zai-coding-plan`, чтобы профиль выбывал вместе с `glm` при `auth` или `quota` |
 | Ключ | Пресет `opencode-key`: `--key <имя> --set keyVar=<VAR>`: `ZHIPU_API_KEY` для `zai-coding-plan`, `DEEPSEEK_API_KEY` для `deepseek`, `MINIMAX_API_KEY` для `minimax`. Ключ Coding Plan для `zai-coding-plan` тратит ту же квоту: добавьте и `--set shares=zai-coding-plan` (для ключа Standard — не нужно) |
+| OpenCode Go | Пресет `opencode-go`: `key set opencode-go`, затем `profile add go-glm --from opencode-go --model opencode-go/<model>` с id из `opencode models opencode-go`, например `opencode-go/glm-5.3`, `opencode-go/glm-5.3-flash`, `opencode-go/kimi-k3.1-pro`, `opencode-go/kimi-k3` (есть и модели DeepSeek, MiniMax, Qwen). `opencode models` показывает провайдера, только пока задана переменная с его ключом. OpenCode — родной клиент Go и сам шлёт заголовок сессии, о котором просит Go; прокси перед подпиской не ставить ([07 OC1](./docs/research/universal-dispatchers/07-tos-matrix.md)). Лимит Go — это `quota` |
+| DeepInfra | Пресет `opencode-deepinfra`: `key set deepinfra`, модель `deepinfra/zai-org/GLM-5.3` (проверено в OpenCode 1.19.3); GLM-5.3-Flash: `--model deepinfra/zai-org/GLM-5.3-Flash`. У DeepInfra только OpenAI-совместимый эндпоинт, поэтому `claude -p` с ним не работает. GLM-5.3 там в fp4: страдают вызовы инструментов и длинный контекст, так что ставьте его в конец цепочки, не первым |
 | Модель, effort | `<provider>/<model>`, id из вывода `opencode models <provider>`; `effort` → `--variant` |
 | Каталог | Профиль со входом использует ваши собственные каталоги OpenCode. Профиль с ключом получает свой, `homes/<профиль>/`, и в нём не должно быть сохранённого входа (`data/opencode/auth.json` перекрыл бы ключ: `doctor` FAIL, задача отвергается). Свой вход (второй аккаунт): `"home": "isolated"`, затем `agent-dispatch profile env <имя> -- opencode auth login`. При любой изоляции OpenCode читает ещё и `~/.opencode/opencode.json` и `opencode.jsonc` в вашем настоящем домашнем каталоге, а также те же два файла в управляемом каталоге настроек машины (`/Library/Application Support/opencode` на macOS, `/etc/opencode` на Linux). У профиля с ключом они читаются как JSONC (комментарии и висячие запятые допустимы), и проверяется запись `provider.<его провайдер>` (если `model` провайдера не называет — каждая запись): поле, которое перекрыло бы ключ или увело бы запросы на другой адрес, отклоняет профиль (`doctor` FAIL `home`, задача отвергается), и сообщение называет поле, но не его значение. Такие поля — любое поле записи, кроме `name`, `whitelist`, `blacklist`, `models` и `options` (`npm`, `api`, `env`, а также `id` или `doc`, оставшиеся от скопированной записи каталога); любой ключ `options`, кроме `timeout`, `chunkTimeout` и `setCacheKey` (`apiKey`, `baseURL`, `headers` и подобные); у модели в `models` — её `provider` и `headers`, а также `apiKey`, `baseURL` или `headers` в её `options` или `variants`. Безобидная запись (пустая, `name`, `whitelist`/`blacklist`, тайм-ауты, лимиты модели и варианты рассуждения) и файл без такой записи работают. Удалите поле. Перенести в `homes/<профиль>/config/opencode/opencode.json` можно только настройку без учётных данных (`baseURL`, `api`, `npm`): этот файл OpenCode тоже читает, и `apiKey`, заголовок или `env` там так же перекрыли бы ключ (ключ приходит через `keyVar`), а адаптер этот файл не проверяет. В управляемом каталоге это делает его администратор. Файл там, который не разбирается даже как JSONC или содержит ключ верхнего уровня с `{env:…}` или `{file:…}` (OpenCode подставляет их до разбора, и ключ может стать `provider`; сообщение называет ключ, а переменная и файл не читаются), проверить нельзя, поэтому он тоже отклоняет профиль; пустой файл (0 байт) OpenCode читает как `{}`, он пропускается. MDM-профиль macOS `ai.opencode.managed` не проверяется |
 | Опции | `options.permission`: дополнительные правила разрешений OpenCode — для пишущей роли все, для ревьюера только `deny`. `options.plugins: true` загружает ваши внешние плагины OpenCode (по умолчанию выключены: `OPENCODE_PURE=1`) |
@@ -288,6 +300,18 @@ agent-dispatch doctor --profile deepseek-claude --probe             # 3. про�
 | Опции | `options.sessionLog: true` снова включает выгрузку журнала сессий dsh (по умолчанию выключена). `options.agentsHome: "user"` разрешает dsh читать общий `~/.agents`. `options.patch` добавляет строки в patch-файл dsh; переменная ключа, `baseURL` и строки разрешений остаются за адаптером |
 | Ревьюер | Режим dsh `read-only`, песочница ОС: читает и запускает команды, любая запись запрещена. Пишущая роль работает в `danger-full-access` |
 | Кто видит ключ | dsh убирает переменные `*KEY*` и `*TOKEN*` из окружения своих инструментов |
+
+### Kimi Code CLI (`kimi`)
+
+| | |
+|---|---|
+| Установка | `npm i -g @moonshot-ai/kimi-code@2.4.1` или на Windows родной `kimi.exe` из WinGet — он запускается как есть. Проверено: 2.4.1 (по исходникам и вживую на Windows 11). При установке через npm на Windows npm ставит `.cmd`-обёртку, а она не запускается: задайте профилю `"wrap": ["node"]` и `"bin": "<npm prefix>\\node_modules\\@moonshot-ai\\kimi-code\\dist\\main.mjs"` (префикс печатает `npm prefix -g`, обычно `%APPDATA%\\npm`) |
+| Ключ | Пресет `kimi-code`: `key set kimi-code`, модель `k3.1-pro`; K2.8 Preview: `profile add kimi-k28 --from kimi-code --model kimi-k2.8-preview`. Профиль с ключом работает в изолированном каталоге (`homes/<профиль>/kimi`), где `agent-dispatch` перед каждой задачей пишет `config.toml`: один провайдер типа `kimi` на `endpoint` (по умолчанию `https://api.kimi.ai/coding/v1`; материковый Китай — `https://api.kimi.com/coding/v1`), чей `api_key_env` называет `AGENT_DISPATCH_KIMI_API_KEY`, и модель профиля как единственный алиас. Сам ключ ни в какой файл не пишется. Имя ключа то же, что у `claude-kimi-code`, поэтому при `auth` или `quota` оба профиля выбывают вместе |
+| Вход | `"auth": "login"`: `kimi login` в вашем `~/.kimi-code` (или `$KIMI_CODE_HOME`), либо с `"home": "isolated"` через `agent-dispatch profile env <имя> -- kimi login`. Модель — алиас из `config.toml` этого каталога, например `kimi-code/k3` |
+| Модель, effort | `model` уходит в `-m`, `effort` — в `KIMI_MODEL_THINKING_EFFORT`. `options.contextSize` задаёт `max_context_size` алиаса (по умолчанию 262144) |
+| Промпт | kimi читает промпт только из `-p`, поэтому он идёт в командной строке: до 120 КиБ на Linux, 200 КиБ на macOS, около 30 000 символов на Windows. Более длинный промпт отклоняется при `task` или роняет задачу с классом `context` в раннере — его берёт следующий профиль |
+| Ревьюер | `-p` одобряет любые инструменты (режим «auto» у kimi), так что пишущая роль может всё. Ревьюер получает `--agent-file` только с `Read`, `Glob`, `Grep` (без git) и никогда не продолжается (resume) |
+| По умолчанию | телеметрия, проверка обновлений и cron выключены; фоновые задачи хода останавливаются в его конце (`KIMI_CODE_BACKGROUND_PRINT_BACKGROUND_MODE=exit`); навыки пользователя и проекта выключены (`--skills-dir` пустого каталога); `KIMI_MODEL_*` и `KIMI_CODE_TRUST_WORKSPACE` убираются. Лимит подписки Kimi Code, который API отдаёт только как HTTP 429, считается `rate-limit`, а не `quota` (текста про лимит подписки в исходниках 2.4.1 нет) |
 
 ### ZCode и Codex
 
@@ -364,7 +388,7 @@ agent-dispatch profile add glm-api      --from claude-zai     # key set zai
 
 ### Песочница (по желанию)
 
-`sandbox` и `wrap` есть только у профилей `claude`, `opencode`, `pi` и `dsh`; `doctor` проверяет оба поля. По умолчанию песочница выключена (`"sandbox": "off"`): пишущая роль тогда работает с полным доступом (claude `bypassPermissions`, dsh `danger-full-access`), как ZCode с `--mode yolo`.
+`sandbox` и `wrap` есть только у профилей `claude`, `opencode`, `pi`, `dsh` и `kimi`; `doctor` проверяет оба поля. По умолчанию песочница выключена (`"sandbox": "off"`): пишущая роль тогда работает с полным доступом (claude `bypassPermissions`, dsh `danger-full-access`), как ZCode с `--mode yolo`.
 
 | Харнесс | `"sandbox": "native"` |
 |---|---|
@@ -507,6 +531,7 @@ Upstream-скилл `subagent-driven-development` заменён на `dev-orche
 ├── tests/test-zcode-dispatch.sh     # Тесты обёртки ZCode (CLI-заглушка)
 ├── tests/test-agent-core.sh         # Тесты ядра задач (тривиальный адаптер)
 ├── tests/test-agent-core-windows.sh # Ядро задач на Windows (Git Bash)
+├── tests/test-zcode-dispatch-windows.sh # Обёртка ZCode на Windows (Git Bash)
 ├── tests/test-agent-dispatch.sh     # Тесты agent-dispatch (заглушки обёрток)
 ├── tests/test-adapter-*.sh          # Тесты адаптеров харнессов (заглушки харнессов)
 ├── tests/test-orchestrator-defaults.sh  # Встроенные роли, команды и лимиты не изменились
@@ -534,6 +559,7 @@ bash tests/test-pipeline-context.sh
 bash tests/test-zcode-dispatch.sh
 bash tests/test-agent-core.sh
 bash tests/test-agent-core-windows.sh  # на Windows, под Git Bash; на других ОС пропускается
+bash tests/test-zcode-dispatch-windows.sh  # так же
 bash tests/test-agent-dispatch.sh
 for t in claude opencode pi dsh; do bash tests/test-adapter-$t.sh; done
 bash tests/test-orchestrator-defaults.sh

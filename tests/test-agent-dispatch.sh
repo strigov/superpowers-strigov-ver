@@ -314,6 +314,14 @@ if (bad.length) { console.log(bad.join(" ")); process.exit(1); }' -- "$DEFAULTS_
     golden_variant "glm --fresh → task --background --fresh --prompt-file F" zcode-dispatch \
         "$(jarr task --background --fresh --prompt-file "$prompt")" \
         -- --profile glm --background --write --fresh --prompt-file "$prompt"
+    golden_variant "glm-pro --cwd W → task --background --model GLM-5.3 --cwd W --prompt-file F" zcode-dispatch \
+        "$(jarr task --background --model GLM-5.3 --cwd "$repo2" --prompt-file "$prompt")" \
+        -- --profile glm-pro --role implementer --background --write --cwd "$repo2" --prompt-file "$prompt"
+    AD_LIB="$REPO_ROOT/bin/lib" node --input-type=module -e '
+const z = await import(process.env.AD_LIB + "/zcode-dispatch.mjs");
+const a = (await import(process.env.AD_LIB + "/adapters/zcode.mjs")).default;
+process.exit(JSON.stringify(z.MODEL_IDS) === JSON.stringify(a.models) && z.DEFAULT_MODEL === a.pinned.model && z.PINNED_MODEL === `${a.pinned.model}$${a.pinned.effort}` ? 0 : 1);'
+    verdict "3 the zcode adapter lists the models zcode-dispatch pins (MODEL_IDS, DEFAULT_MODEL, PINNED_MODEL)" $?
     golden_variant "luna --cwd W --resume-task task-… → task --background --write --model gpt-6-luna --effort max --cwd W --resume-task task-… --prompt-file F" codex-dispatch \
         "$(jarr task --background --write --model gpt-6-luna --effort max --cwd "$repo2" --resume-task task-mf3abc-x1y2z3 --prompt-file "$prompt")" \
         -- --profile luna --role implementer --background --write --cwd "$repo2" --resume-task task-mf3abc-x1y2z3 --prompt-file "$prompt"
@@ -649,6 +657,10 @@ require("node:fs").writeFileSync(process.argv[2], JSON.stringify(cfg, null, 2));
         '{ "version": 1, "profiles": { "x": { "harness": "pi", "auth": "login", "endpoint": "https://e.example" } } }'
     refuse_config "an unfilled placeholder" "unfilled placeholder <model>" \
         '{ "version": 1, "profiles": { "x": { "harness": "opencode", "auth": "login", "model": "openai/<model>" } } }'
+    refuse_config "a zcode profile with a model zcode-dispatch does not pin" "model must be one of the models zcode-dispatch pins (GLM-5.3-Flash, GLM-5.3)" \
+        '{ "version": 1, "profiles": { "x": { "harness": "zcode", "model": "GLM-4.7" } } }'
+    refuse_config "a zcode profile with an effort other than max" 'effort must be "max"' \
+        '{ "version": 1, "profiles": { "x": { "harness": "zcode", "model": "GLM-5.3", "effort": "high" } } }'
     refuse_config "a codex profile without effort" "needs model and effort" \
         '{ "version": 1, "profiles": { "x": { "harness": "codex", "model": "gpt-6-luna" } } }'
     refuse_config "an inproc profile without effort (the Agent tool needs both)" "an inproc profile needs model and effort" \
@@ -660,8 +672,8 @@ require("node:fs").writeFileSync(process.argv[2], JSON.stringify(cfg, null, 2));
         '{ "version": 1, "profiles": { "x": { "harness": "claude", "endpoint": "https://api.deepseek.com/anthropic", "model": "deepseek-v4-pro", "authHeader": "x-api-key" } } }'
     refuse_config "a claude login profile with authHeader" "profile x: authHeader applies to claude API profiles only" \
         '{ "version": 1, "profiles": { "x": { "harness": "claude", "auth": "login", "authHeader": "bearer" } } }'
-    [[ "$((PASSES - refusals_before))" -eq 18 ]]
-    verdict "6 every config refusal above counted in this shell (18)" $? "counted: $((PASSES - refusals_before))"
+    [[ "$((PASSES - refusals_before))" -eq 20 ]]
+    verdict "6 every config refusal above counted in this shell (20)" $? "counted: $((PASSES - refusals_before))"
 
     # A key pasted where its name belongs (auth.key, auth.keyEnv, keyVar) or unquoted into config.json is never echoed:
     # config problems reach stderr and, through the orchestrator, the chat (spec §3.5, §3.6 А11).
@@ -996,12 +1008,12 @@ EOF
 
     # --- 11. status without an id merges the three stores ---
     reset_wrappers
-    can zcode-dispatch status stdout "{\"workspaceRoot\":\"$repo\",\"running\":[{\"id\":\"zt-0009\",\"status\":\"running\",\"workspaceRoot\":\"$repo\"}],\"recent\":[{\"id\":\"zt-0008\",\"status\":\"failed\",\"errorClass\":\"quota\",\"workspaceRoot\":\"$repo\"}]}"
+    can zcode-dispatch status stdout "{\"workspaceRoot\":\"$repo\",\"running\":[{\"id\":\"zt-0009\",\"status\":\"running\",\"workspaceRoot\":\"$repo\"}],\"recent\":[{\"id\":\"zt-0008\",\"status\":\"failed\",\"errorClass\":\"quota\",\"workspaceRoot\":\"$repo\"},{\"id\":\"zt-0007\",\"status\":\"completed\",\"model\":\"GLM-5.3\$max\",\"workspaceRoot\":\"$repo\"}]}"
     can codex-dispatch status stdout "{\"workspaceRoot\":\"$repo\",\"running\":[{\"id\":\"task-run1\",\"status\":\"running\",\"write\":true,\"workspaceRoot\":\"$repo\",\"request\":{\"model\":\"gpt-6.1-sol\",\"effort\":\"xhigh\"}}],\"latestFinished\":{\"id\":\"task-done1\",\"status\":\"completed\",\"write\":false,\"workspaceRoot\":\"$repo\",\"request\":{\"model\":\"gpt-6-astra\",\"effort\":\"high\"}},\"recent\":[]}"
     run_ad status
     ok=0
     # $core_id is this tree's newest core job (section 10): `status` without --all lists the 10 newest finished ones.
-    for line in "zt-0009 glm running write=yes cwd=$repo" "task-run1 sol running write=yes cwd=$repo" "zt-0008 glm failed write=yes cwd=$repo" \
+    for line in "zt-0009 glm running write=yes cwd=$repo" "task-run1 sol running write=yes cwd=$repo" "zt-0008 glm failed write=yes cwd=$repo" "zt-0007 glm-pro completed write=yes cwd=$repo" \
         "task-done1 astra-high completed write=no cwd=$repo" "$core_id ct-w completed write=yes cwd=$repo"; do
         grep -qxF "$line" <<<"$OUT" || { ok=1; echo "    missing: $line"; }
     done
@@ -1046,7 +1058,8 @@ EOF
     run_ad channels
     [[ "$RC" -eq 0 && "$OUT" == *"luna harness=codex model=gpt-6-luna effort=max auth=login linked=astra,astra-high,sol source=built-in"* \
         && "$OUT" == *"ct-api harness=claude model=stub-model effort=- auth=key:tkey linked=- source=config"* \
-        && "$OUT" == *"glm harness=zcode model=GLM-5.3-Flash effort=max auth=native linked=- source=built-in"* ]]
+        && "$OUT" == *"glm harness=zcode model=GLM-5.3-Flash effort=max auth=native linked=glm-pro source=built-in"* \
+        && "$OUT" == *"glm-pro harness=zcode model=GLM-5.3 effort=max auth=native linked=glm source=built-in"* ]]
     verdict "12 channels: every profile with harness, model, key or login source and its linked profiles" $? "$OUT"
     run_ad channels --json
     [[ "$RC" -eq 0 && "$(node -e '
@@ -1060,9 +1073,12 @@ console.log([keys, JSON.stringify(luna.linked), luna.auth, luna.source, api.auth
 
     run_ad preset list
     n="$(grep -c . <<<"$OUT")"
-    [[ "$RC" -eq 0 && "$n" -eq 12 && "$OUT" == *"claude-zai harness=claude auth=key:zai model=glm-5.3[1m] endpoint=https://api.z.ai/api/anthropic shares=zai-coding-plan"* \
-        && "$OUT" == *"opencode-key harness=opencode auth=key:<name> model=<provider/model> keyVar=<VAR> (fill: <name> <VAR> <provider/model>)"* ]]
-    verdict "12 preset list: the 12 presets of §4.2 with their placeholders" $? "lines=$n" "$OUT"
+    [[ "$RC" -eq 0 && "$n" -eq 16 && "$OUT" == *"claude-zai harness=claude auth=key:zai model=glm-5.3[1m] endpoint=https://api.z.ai/api/anthropic shares=zai-coding-plan"* \
+        && "$OUT" == *"opencode-key harness=opencode auth=key:<name> model=<provider/model> keyVar=<VAR> (fill: <name> <VAR> <provider/model>)"* \
+        && "$OUT" == *"claude-kimi-code harness=claude auth=key:kimi-code model=k3.1-pro endpoint=https://api.kimi.ai/coding/"* \
+        && "$OUT" == *"opencode-go harness=opencode auth=key:opencode-go model=opencode-go/<model> keyVar=OPENCODE_API_KEY (fill: <model>)"* \
+        && "$OUT" == *"opencode-deepinfra harness=opencode auth=key:deepinfra model=deepinfra/zai-org/GLM-5.3 keyVar=DEEPINFRA_API_KEY"* ]]
+    verdict "12 preset list: the 16 presets of §4.2 with their placeholders" $? "lines=$n" "$OUT"
 
     no_config
     run_ad profile add glm-api --from claude-zai --set effort=max
@@ -1070,8 +1086,8 @@ console.log([keys, JSON.stringify(luna.linked), luna.auth, luna.source, api.auth
     verdict "12 profile add --from claude-zai writes config.json (version 1, mode 0600) with the preset and the --set" $? "rc=$RC out: $OUT err: $ERR"
     run_ad profile show glm-api
     [[ "$RC" -eq 0 && "$(jfield profile.home <<<"$OUT")" == isolated && "$(jfield profile.sandbox <<<"$OUT")" == off && "$(jfield profile.timeoutMin <<<"$OUT")" == 60 \
-        && "$(jfield profile.maxParallel <<<"$OUT")" == 2 && "$(jfield linked <<<"$OUT")" == '["glm"]' && "$(jfield source <<<"$OUT")" == config ]]
-    verdict "12 profile show: the §3.4 defaults (home isolated for a claude key, sandbox off, timeoutMin 60, maxParallel 2) and glm linked by zai-coding-plan" $? "$OUT"
+        && "$(jfield profile.maxParallel <<<"$OUT")" == 2 && "$(jfield linked <<<"$OUT")" == '["glm","glm-pro"]' && "$(jfield source <<<"$OUT")" == config ]]
+    verdict "12 profile show: the §3.4 defaults (home isolated for a claude key, sandbox off, timeoutMin 60, maxParallel 2) and glm, glm-pro linked by zai-coding-plan" $? "$OUT"
     before="$(cat "$CONFIG")"
     run_ad profile add oc1 --from opencode-key
     [[ "$RC" -eq 2 && "$ERR" == *"fill the placeholder(s) <name> <VAR> <provider/model>"*"nothing written"* && "$(cat "$CONFIG")" == "$before" ]]
@@ -1518,8 +1534,8 @@ for (const [name, preset] of Object.entries(cli.DEFAULTS.presets)) {
   }
 }
 console.log(bad.length ? bad.join("\n") : `ok ${n}`);' 2>&1)"
-    [[ "$OUT" == "ok 12" ]]
-    verdict "14 every §4.2 preset (12), filled, passes checkProfile and plans on its real adapter with no env conflict" $? "$OUT"
+    [[ "$OUT" == "ok 16" ]]
+    verdict "14 every §4.2 preset (16), filled, passes checkProfile and plans on its real adapter with no env conflict" $? "$OUT"
 
     # --- 15. in-session roles on external profiles, end to end (increment 6, spec §8 row 6) ---
     # route → task --role with the recipe's --write → status → result on the four real adapters; the harness argv per

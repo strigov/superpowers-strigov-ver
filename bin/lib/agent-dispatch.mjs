@@ -22,8 +22,8 @@
 // Adapters. The pass-through adapters (adapters/zcode.mjs, adapters/codex.mjs) are imported here; they return the
 // wrapper argv and parse the wrappers' `status --json`, and this CLI runs the wrapper with stdio inherited, so its
 // stdout, stderr and exit code pass through unchanged. A core adapter (spec §3.2) is the file
-// adapters/<harness>.mjs for harness ∈ {claude, opencode, pi, dsh}, whose default export has id === <harness>; all
-// four ship (increments 2–5), each loaded on demand — a runner loads only its job's. A harness without its file is
+// adapters/<harness>.mjs for harness ∈ {claude, opencode, pi, dsh, kimi}, whose default export has id === <harness>; all
+// five ship (increments 2–5; kimi in 0.15.0), each loaded on demand — a runner loads only its job's. A harness without its file is
 // refused (`harness <h> is not available in this version`). $AGENT_DISPATCH_ADAPTER_DIR names a directory searched
 // first (tests put a stand-in adapter there), like $AGENT_DISPATCH_ZCODE / $AGENT_DISPATCH_CODEX name the wrappers.
 // An adapter that fails to load stops only what needs it: doctor reports it as a FAIL row of each profile on that
@@ -56,15 +56,15 @@ const ADAPTERS_DIR = path.join(LIB_DIR, "adapters");
 export const DEFAULTS = JSON.parse(fs.readFileSync(path.join(LIB_DIR, "agents-defaults.json"), "utf8"));
 
 export const ADAPTER_DIR_VAR = "AGENT_DISPATCH_ADAPTER_DIR";
-export const HARNESSES = ["zcode", "codex", "claude", "opencode", "pi", "dsh", "inproc"];
-export const CORE_HARNESSES = ["claude", "opencode", "pi", "dsh"];
+export const HARNESSES = ["zcode", "codex", "claude", "opencode", "pi", "dsh", "kimi", "inproc"];
+export const CORE_HARNESSES = ["claude", "opencode", "pi", "dsh", "kimi"];
 const PASS_THROUGH = { zcode: zcodeAdapter, codex: codexAdapter };
 export const RESERVED_NAMES = ["claude", "inproc", "default"];
 // Core job id prefix → harness (spec §3.2), for the merged status list.
-const PREFIX_HARNESS = { ct: "claude", oc: "opencode", pi: "pi", dt: "dsh" };
+const PREFIX_HARNESS = { ct: "claude", oc: "opencode", pi: "pi", dt: "dsh", ki: "kimi" };
 // How a role on the harness is held to reading (route's readOnly=): Codex and dsh sandboxes, claude and pi tool
 // sets, OpenCode permission rules; ZCode has no read-only mode. Inproc roles print "-": the session decides.
-const READ_ONLY = { zcode: "none", codex: "os", claude: "tools", opencode: "rules", pi: "tools", dsh: "os" };
+const READ_ONLY = { zcode: "none", codex: "os", claude: "tools", opencode: "rules", pi: "tools", dsh: "os", kimi: "tools" };
 
 const NAME_RE = core.PROFILE_NAME_RE;
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -84,6 +84,7 @@ const FIELDS = {
   opencode: [...CORE_FIELDS, "keyVar"],
   pi: [...CORE_FIELDS, "keyVar"],
   dsh: [...CORE_FIELDS, "endpoint"],
+  kimi: [...CORE_FIELDS, "endpoint"],
 };
 const ALL_FIELDS = new Set(Object.values(FIELDS).flat());
 // auth modes per harness: "key" stands for {key}, {keyEnv} and {keyCmd}.
@@ -94,17 +95,19 @@ const AUTH_MODES = {
   opencode: ["login", "key"],
   pi: ["login", "key"],
   dsh: ["native", "key"],
+  kimi: ["login", "key"],
 };
-const DEFAULT_AUTH = { zcode: "native", codex: "login", claude: "login", opencode: "login", pi: "login", dsh: "native" };
+const DEFAULT_AUTH = { zcode: "native", codex: "login", claude: "login", opencode: "login", pi: "login", dsh: "native", kimi: "login" };
 // `options` per harness (spec §3.4, §3.6 Б) and the type of each value.
 const OPTIONS = {
   claude: { tools: "string", settings: "object", maxTurns: "count" },
   opencode: { permission: "object", plugins: "boolean" },
   pi: { extensions: "strings" },
   dsh: { sessionLog: "boolean", agentsHome: ["user", "empty"], patch: "object" },
+  kimi: { contextSize: "count" },
 };
 // How the user logs in to a harness (spec §4.3), for the `next:` line of profile add and doctor hints.
-const LOGIN_STEP = { claude: "claude, then /login", opencode: "opencode auth login", pi: "pi, then /login", codex: "codex login" };
+const LOGIN_STEP = { claude: "claude, then /login", opencode: "opencode auth login", pi: "pi, then /login", codex: "codex login", kimi: "kimi login" };
 // --skip classes: the error classes of §3.8 plus the channel states of the `channels` marker.
 const SKIP_CLASSES = new Set([...core.ERROR_CLASSES, "down", "off", "kill-switch"]);
 // Classes that take every linked profile out with the failing one (spec §3.5 "Общий ключ или вход").
@@ -220,6 +223,10 @@ export function checkProfile(name, raw) {
       }
     }
   }
+  if (harness === "kimi" && raw.endpoint !== undefined && authMode(raw.auth ?? DEFAULT_AUTH.kimi) !== "key") {
+    problem(`${at}: endpoint applies to keyed kimi profiles only (it goes into the config.toml agent-dispatch writes for the key); a login uses the endpoint of kimi login`);
+  }
+  if (harness === "kimi" && authMode(raw.auth ?? DEFAULT_AUTH.kimi) === "key" && raw.model === undefined) problem(`${at}: a kimi profile with a key needs model (the Kimi Code model id, e.g. k3.1-pro)`);
   if (raw.keyVar !== undefined) checkString(at, "keyVar", raw.keyVar, { pattern: ENV_NAME_RE, what: "a variable name", secret: "keyVar names the variable the harness reads the key from, not the key" });
   if (raw.shares !== undefined) checkString(at, "shares", raw.shares, { pattern: SHARES_RE, what: `a label (${SHARES_RE})` });
   if (raw.env !== undefined) {
@@ -242,6 +249,8 @@ export function checkProfile(name, raw) {
   if (raw.maxParallel !== undefined && !(Number.isInteger(raw.maxParallel) && raw.maxParallel > 0)) problem(`${at}: maxParallel must be a positive integer`);
   if (harness === "inproc" && (raw.model === undefined || raw.effort === undefined)) problem(`${at}: an inproc profile needs model and effort (the Agent tool's model and effort)`);
   if (harness === "codex" && (raw.model === undefined || raw.effort === undefined)) problem(`${at}: a codex profile needs model and effort (they go to codex-dispatch as --model and --effort)`);
+  if (harness === "zcode" && raw.model !== undefined && !zcodeAdapter.models.includes(raw.model)) problem(`${at}: model must be one of the models zcode-dispatch pins (${zcodeAdapter.models.join(", ")}); without it the default ${zcodeAdapter.pinned.model}`);
+  if (harness === "zcode" && raw.effort !== undefined && raw.effort !== zcodeAdapter.pinned.effort) problem(`${at}: effort must be "${zcodeAdapter.pinned.effort}" (zcode-dispatch pins every model at that reasoning level) or left out`);
   if ((harness === "opencode" || harness === "pi") && authMode(raw.auth) === "key" && raw.keyVar === undefined) {
     problem(`${at}: a ${harness} profile with a key needs keyVar (the variable the harness reads the key from)`);
   }
@@ -280,7 +289,7 @@ export function validateConfig(data) {
 function defaultHome(profile) {
   const keyed = authMode(profile.auth) === "key";
   if (profile.harness === "claude") return profile.auth === "login" ? "user" : "isolated";
-  if (profile.harness === "opencode" || profile.harness === "pi") return keyed ? "isolated" : "user";
+  if (profile.harness === "opencode" || profile.harness === "pi" || profile.harness === "kimi") return keyed ? "isolated" : "user";
   return "user";
 }
 
@@ -470,7 +479,7 @@ function parseSkips(values) {
 
 function shownModel(profile) {
   const pass = PASS_THROUGH[profile.harness];
-  return { model: pass?.pinned?.model ?? profile.model ?? "-", effort: pass?.pinned?.effort ?? profile.effort ?? "-" };
+  return { model: (pass?.modelOf ? pass.modelOf(profile) : pass?.pinned?.model) ?? profile.model ?? "-", effort: pass?.pinned?.effort ?? profile.effort ?? "-" };
 }
 
 export function routeRole(state, role, skips = [], links = linkedProfiles(state)) {
@@ -681,8 +690,9 @@ function queryStore(pass, state, { cwd, all = false, allSessions = false } = {})
     return { error: `${pass.wrapper.name} status --json printed no JSON` };
   }
   const zcodeName = [...state.profiles.values()].find((entry) => entry.p.harness === "zcode")?.name ?? "glm";
+  const zcodeProfiles = [...state.profiles.values()].filter((entry) => entry.p.harness === "zcode").map((entry) => ({ name: entry.name, model: zcodeAdapter.modelOf(entry.p) }));
   const profiles = [...state.profiles.values()].filter((entry) => entry.p.harness === "codex").map((entry) => ({ name: entry.name, model: entry.p.model, effort: entry.p.effort }));
-  return { jobs: pass.statusJobs(data, { profileName: zcodeName, profiles }) };
+  return { jobs: pass.statusJobs(data, { profileName: zcodeName, zcodeProfiles, profiles }) };
 }
 
 // spec §3.9: before a write task, the stores other than the task's own must hold no running write job in the same
@@ -1229,8 +1239,8 @@ async function profileEnv(rest) {
   core.writeAdapterFiles({ dirs: home.dirs ?? [], files: home.files ?? [] });
   for (const [, value] of entries) if (value.startsWith(`${dir}${path.sep}`)) core.ensurePrivateDir(value);
   // A keyed profile's home is isolated so that no stored login outranks the key (spec §3.4).
-  const keyed = (p.harness === "opencode" || p.harness === "pi") && authMode(p.auth) === "key";
-  const keyedNote = keyed ? `keyed profile: nothing to log into here; a login stored in this home would win over ${p.keyVar}` : null;
+  const keyed = (p.harness === "opencode" || p.harness === "pi" || p.harness === "kimi") && authMode(p.auth) === "key";
+  const keyedNote = keyed ? (p.harness === "kimi" ? "keyed profile: nothing to log into here; agent-dispatch writes this home's config.toml on every task" : `keyed profile: nothing to log into here; a login stored in this home would win over ${p.keyVar}`) : null;
   if (command) {
     if (keyedNote) errOut(`${CLI_NAME}: WARN profile ${name}: ${keyedNote}\n`);
     return runWithEnv(command, Object.fromEntries(entries));
@@ -1344,7 +1354,7 @@ function checkKey(name, p, report) {
 
 function checkSandbox(name, p, report) {
   if (p.sandbox !== "native") return;
-  if (p.harness === "opencode" || p.harness === "pi") {
+  if (p.harness === "opencode" || p.harness === "pi" || p.harness === "kimi") {
     report("WARN", `sandbox ${name}`, `${p.harness} has no sandbox of its own; "sandbox": "native" does nothing — use "wrap" (spec §3.7)`);
     return;
   }
@@ -1446,7 +1456,9 @@ async function doctorProfile(state, name, report, checks) {
     const file = wrapperPath(pass);
     if (!isExecutable(file)) report("FAIL", `profile ${name}`, `${pass.wrapper.name} not found or not executable: ${file}`);
     else if (p.harness === "zcode") {
-      report("ok", `profile ${name}`, `pass-through to ${file} (${pass.pinned.model} ${pass.pinned.effort}, pinned by the wrapper)${single ? `; check the GLM channel itself with: ${pass.wrapper.name} doctor --probe` : ""}`);
+      const model = pass.modelOf(p);
+      const flag = p.model !== undefined ? ` --model ${p.model}` : "";
+      report("ok", `profile ${name}`, `pass-through to ${file} (${model} ${pass.pinned.effort}, pinned by the wrapper${flag ? `; task gets${flag}` : ""})${single ? `; check the GLM channel itself with: ${pass.wrapper.name} doctor --probe${flag}` : ""}`);
     } else {
       report("ok", `profile ${name}`, `pass-through to ${file} (--model ${p.model} --effort ${p.effort}; the model is not checked)`);
       checkCodex(name, report, checks);
@@ -1582,7 +1594,7 @@ async function cmdDoctor(args) {
     // Windows: every background job and auxiliary command runs under the compiled process helper (agent-core.mjs).
     const helper = core.winHelper();
     if (helper) report("ok", "platform", `win32: process helper ${helper} (each job in a Job Object; a stop is TerminateProcess, no polite signal)`);
-    else report("FAIL", "platform", `win32: ${core.winHelperError()}; no job of a core harness (claude, opencode, pi, dsh) can start`);
+    else report("FAIL", "platform", `win32: ${core.winHelperError()}; no job of a core harness (claude, opencode, pi, dsh, kimi) can start, nor a zcode-dispatch job (glm, glm-pro), which runs on the same helper`);
   }
   try {
     const names = core.passthroughNames();

@@ -209,6 +209,7 @@ export default {
 
 | Профиль | Команда |
 |---|---|
+| `glm-pro` (0.14.0) и любой профиль `zcode` с `model` | то же, что `glm`, плюс `--model <model профиля>` сразу после `--background`. `model` — один из пинов `zcode-dispatch` (`GLM-5.3-Flash`, `GLM-5.3`), `effort` — только `max` или не указан. У каждой модели свой личный конфиг провайдера с тем же ключом; `api-key set`/`clear` пишут оба, `api-key sync` копирует сохранённый ключ. В `status` задача `zt-` относится к первому профилю `zcode`, чья модель совпадает с `model` записи |
 | `glm` | `zcode-dispatch task --background [--cwd W] [--resume-task zt-N \| --fresh] --prompt-file F`. `--write`, `--profile` и `--role` не передаются: `zcode-dispatch` разбирает аргументы строго (`parseArgs({strict: true})`) и ответил бы отказом. Задача без `--write` уходит той же командой и печатает одну строку WARN: у `glm` нет режима только чтения |
 | профили `codex` (`luna`, `sol`, `astra`, `astra-high` и пользовательские) | `codex-dispatch task --background [--write] --model <model профиля> --effort <effort профиля> [--cwd W] [--resume-task task-… \| --fresh] --prompt-file F` |
 | `status`, `result`, `cancel` | по префиксу id: `zt-` → `zcode-dispatch`, `task-` → `codex-dispatch`. stdout, stderr и коды выхода обёрток не меняются |
@@ -447,6 +448,7 @@ state/<ws>/jobs/    задачи ct-, oc-, pi-, dt-
 {
   "profiles": {
     "glm":           { "harness": "zcode", "auth": "native", "shares": "zai-coding-plan", "maxParallel": 2 },
+    "glm-pro":       { "harness": "zcode", "auth": "native", "model": "GLM-5.3", "shares": "zai-coding-plan", "maxParallel": 2 },
     "luna":          { "harness": "codex", "auth": "login", "model": "gpt-6-luna",  "effort": "max" },
     "sol":           { "harness": "codex", "auth": "login", "model": "gpt-6.1-sol", "effort": "xhigh" },
     "astra":         { "harness": "codex", "auth": "login", "model": "gpt-6-astra", "effort": "xhigh" },
@@ -541,13 +543,17 @@ state/<ws>/jobs/    задачи ct-, oc-, pi-, dt-
 | `claude-zai` | claude | `{key: zai}` | `https://api.z.ai/api/anthropic` | `glm-5.3[1m]` | `API_TIMEOUT_MS=3000000`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000`; `shares: zai-coding-plan` |
 | `claude-deepseek` | claude | `{key: deepseek}` | `https://api.deepseek.com/anthropic` | `deepseek-v4-pro[1m]` | `CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432` |
 | `claude-kimi` | claude | `{key: kimi}` | `https://api.moonshot.ai/anthropic` | `kimi-k3[1m]` | — |
+| `claude-kimi-code` | claude | `{key: kimi-code}` | `https://api.kimi.ai/coding/` | `k3.1-pro` (K2.8 Preview: `--model kimi-k2.8-preview`) | `authHeader: x-api-key`, `CLAUDE_CODE_EFFORT_LEVEL=max`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW=262144`, `CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144` |
 | `claude-minimax` | claude | `{key: minimax}` | `https://api.minimax.io/anthropic` | `MiniMax-M3.1-Flash[1m]` | `CLAUDE_CODE_AUTO_COMPACT_WINDOW=524288` |
 | `claude-alibaba` | claude | `{key: alibaba}` | `https://<WorkspaceId>.<регион>.maas.aliyuncs.com/apps/anthropic` | `<model>` (например, `qwen3.8-max`) | эндпоинт задаётся через `--set endpoint=…` |
 | `claude-openrouter` | claude | `{key: openrouter}` | `https://openrouter.ai/api` | `<model>` | `authHeader: bearer`, `ANTHROPIC_API_KEY=""` |
 | `claude-local` | claude | `none` | `http://127.0.0.1:<port>` | `<model>` | `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, `CLAUDE_STREAM_IDLE_TIMEOUT_MS=1800000`, `API_FORCE_IDLE_TIMEOUT=0`, `CLAUDE_CODE_ATTRIBUTION_HEADER=0`; `maxParallel: 1` |
 | `dsh-deepseek` | dsh | `{key: deepseek}` | (`https://api.deepseek.com/anthropic`) | `deepseek-v4-pro`, effort `high` | — |
+| `kimi-code` (0.15.0) | kimi | `{key: kimi-code}` | (`https://api.kimi.ai/coding/v1`, в `config.toml` изолированного каталога) | `k3.1-pro` | ключ в `AGENT_DISPATCH_KIMI_API_KEY` через `api_key_env`; ревьюер — `--agent-file` с `Read`, `Glob`, `Grep` |
 | `opencode-login` | opencode | `login` | — | `<provider/model>` | — |
 | `opencode-key` | opencode | `{key: <name>}` | — | `<provider/model>` | `keyVar: <VAR>` (таблица §3.4) |
+| `opencode-go` | opencode | `{key: opencode-go}` | — | `opencode-go/<model>` | `keyVar: OPENCODE_API_KEY` |
+| `opencode-deepinfra` | opencode | `{key: deepinfra}` | — | `deepinfra/zai-org/GLM-5.3` | `keyVar: DEEPINFRA_API_KEY` |
 | `pi-key` | pi | `{key: <name>}` | — | `<provider/id>` | `keyVar: <VAR>` (таблица §3.4) |
 
 ### 4.3 Что пользователь делает один раз и как проверить

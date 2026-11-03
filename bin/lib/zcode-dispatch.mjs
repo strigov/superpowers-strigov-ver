@@ -1,6 +1,7 @@
 // zcode-dispatch.mjs — background-job wrapper around Z.ai's official ZCode CLI
 // (the Agent CLI embedded in the ZCode desktop app: /Applications/ZCode.app on macOS,
-// /opt/ZCode on Linux), shaped like the vendored Codex companion: task / status / result / cancel / doctor.
+// /opt/ZCode on Linux, %LOCALAPPDATA%\Programs\ZCode on Windows), shaped like the vendored Codex companion:
+// task / status / result / cancel / doctor.
 //
 // Pure Node ESM, no dependencies, no shell: every child process is spawned with
 // an argv array. Never reads or writes the user's ~/.zcode (shared with the desktop
@@ -26,6 +27,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+// Windows only: the core's process helper (a Job Object per CLI run, start times, the boot id) and its command-line
+// quoting. See "processes" below.
+import { ENV_ALLOW_WINDOWS, processStart, windowsInvocation, winHelper, winHelperError } from "./agent-core.mjs";
+
+const IS_WIN = process.platform === "win32";
 
 // ---- Values copied from docs/zcode-cli-findings.md "## Inputs for later phases" ----
 export const PINNED_MODEL = "GLM-5.3-Flash$max";
@@ -35,8 +41,11 @@ export const PROMPT_TRANSPORT = "argv"; // "argv" | "stdin"
 // The argv transport passes the whole prompt as one argument. Linux caps a single argument at 32 pages
 // (MAX_ARG_STRLEN: 131072 bytes with its NUL; a 131072-byte argument fails with E2BIG), macOS only the total.
 export const MAX_PROMPT_BYTES = process.platform === "linux" ? 120 * 1024 : 200 * 1024;
+// Windows caps the whole command line at 32 767 UTF-16 units, quoting included (CreateProcess); the rest of the
+// argv (node, zcode.cjs, the flags, the workspace path) stays well inside the headroom left here.
+export const MAX_PROMPT_UNITS_WIN = 30_000;
 export const APP_VERSION_PLIST_KEY = "CFBundleShortVersionString";
-export const SUPPORTED_PLATFORMS = ["darwin", "linux"];
+export const SUPPORTED_PLATFORMS = ["darwin", "linux", "win32"];
 export const MODEL_ARGS = []; // MODEL_MECHANISM flag:<--name> → ["<--name>", PINNED_MODEL]
 export const MODEL_ENV = {}; // MODEL_MECHANISM env:<NAME> → { "<NAME>": PINNED_MODEL }
 // MODEL_MECHANISM personal-config: the selection at SELECTION_PATH of the wrapper-owned personal provider
@@ -48,6 +57,31 @@ export const PERSONAL_CONFIG_BASE = {"schemaVersion":1,"config":{"providerConfig
 // ("Z.ai Coding Plan": access zhipu-coding-plan-api-key, https://api.z.ai/api/anthropic, GLM-5.3 and
 // GLM-5.3-Flash), with the provider id ZCode itself derives from that template; PINNED_SELECTION selects it.
 export const PINNED_SELECTION = {"providerId":"zai-api","modelId":"GLM-5.3-Flash","options":{"reasoningLevel":"max"}};
+// The models a task may pin with --model (0.14.0). Both come from the same zai-api template (builtinModelIds GLM-5.3
+// and GLM-5.3-Flash) and take the reasoning levels low|high|max from its model rule `.*glm-5\.3(?:-flash)?…`
+// (docs/zcode-cli-findings.md, "CLI login lifetime"). The CLI has no model flag (U1): each model gets a personal
+// provider config of its own, holding the same key rule and its own selection, so jobs on different models run side
+// by side and no run ever rewrites a file. The default keeps the file name of 0.13.x and earlier.
+export const DEFAULT_MODEL = PINNED_SELECTION.modelId;
+export const MODELS = {
+  "GLM-5.3-Flash": { selection: PINNED_SELECTION, file: "personal-provider-config.json" },
+  "GLM-5.3": { selection: {"providerId":"zai-api","modelId":"GLM-5.3","options":{"reasoningLevel":"max"}}, file: "personal-provider-config.glm-5.3.json" },
+};
+export const MODEL_IDS = Object.keys(MODELS);
+// "<modelId>$<reasoningLevel>", as PINNED_MODEL spells the default.
+export const pinOf = (model) => `${model}$${MODELS[model].selection.options.reasoningLevel}`;
+// A --model value: an id of MODELS, case-insensitive; anything else is refused.
+export function resolveModel(value) {
+  if (value === undefined) return DEFAULT_MODEL;
+  const model = MODEL_IDS.find((id) => id.toLowerCase() === String(value).toLowerCase());
+  if (!model) throw new UsageError(`unknown --model ${JSON.stringify(value)} (models: ${MODEL_IDS.join(", ")})`);
+  return model;
+}
+// The model id of a job record ("GLM-5.3$max" → "GLM-5.3"); records before 0.14.0 hold PINNED_MODEL.
+const modelOfRecord = (record) => {
+  const id = typeof record?.model === "string" ? record.model.split("$")[0] : DEFAULT_MODEL;
+  return MODELS[id] ? id : DEFAULT_MODEL;
+};
 export const API_KEY_TEMPLATE_ID = "zai-api";
 export const API_KEY_PROVIDER_ID = "zai-api";
 export const API_KEY_ACCESS_TYPE = "zhipu-coding-plan-api-key";
@@ -87,6 +121,8 @@ export const ENV_ALLOW = [
   "DEVELOPER_DIR", "ANDROID_HOME", "ANDROID_SDK_ROOT",
 ];
 export const ENV_ALLOW_PREFIXES = ["LC_", "XDG_"];
+// Windows adds the system's own variables (the core's ENV_ALLOW_WINDOWS: SystemRoot, ComSpec, TEMP, USERPROFILE, …),
+// and its names are case-insensitive: the inherited "Path" passes as PATH.
 // ZCODE_CREDENTIAL_SECRET is the one ENV_ALLOW entry that matches the secret suffix rule: the CLI
 // cannot decrypt its own credentials without it when it is set.
 export const ENV_DENY = [/_(TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIALS)$/i, /^(AWS|GITHUB|GH|ANTHROPIC|OPENAI|CLAUDE)_/i];
@@ -110,14 +146,19 @@ class UsageError extends Error {}
 
 // The app's install layout. ZCode is an Electron app, and electron-builder puts the CLI (glm/zcode.cjs), the
 // built-in provider config and app.asar into the same resources directory on every platform: Contents/Resources
-// in the macOS bundle, resources/ beside the executable elsewhere (/opt/ZCode is the Linux deb/rpm default). The
+// in the macOS bundle, resources/ beside the executable elsewhere (/opt/ZCode is the Linux deb/rpm default; the
+// Windows installer is a per-user NSIS one into %LOCALAPPDATA%\Programs\ZCode, checked with ZCode 3.17.1). The
 // app version comes from Info.plist on macOS and from app.asar's package.json elsewhere (electron-builder writes
 // the same version into both).
-const DEFAULT_APP = { darwin: "/Applications/ZCode.app", linux: "/opt/ZCode" };
+const DEFAULT_APP = {
+  darwin: () => "/Applications/ZCode.app",
+  linux: () => "/opt/ZCode",
+  win32: (env) => path.join(env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "Programs", "ZCode"),
+};
 
 function zcodePaths(env = process.env) {
   const darwin = process.platform === "darwin";
-  const app = env.ZCODE_APP || DEFAULT_APP[process.platform] || DEFAULT_APP.linux;
+  const app = env.ZCODE_APP || (DEFAULT_APP[process.platform] ?? DEFAULT_APP.linux)(env);
   const resources = darwin ? path.join(app, "Contents", "Resources") : path.join(app, "resources");
   return {
     app,
@@ -134,7 +175,7 @@ function stateRoot(env = process.env) {
   return env.ZCODE_STATE_DIR || path.join(os.homedir(), ".claude", "plugins", "data", "superpowers-strigov-ver-zcode");
 }
 
-const personalConfigFile = (env = process.env) => path.join(stateRoot(env), "personal-provider-config.json");
+const personalConfigFile = (model = DEFAULT_MODEL, env = process.env) => path.join(stateRoot(env), MODELS[model].file);
 
 // The CLI's own home for its credentials and state, apart from the user's ~/.zcode, whose credential
 // key the desktop app rewrites with a different token kind (docs/zcode-cli-findings.md, "CLI data home").
@@ -250,13 +291,15 @@ const isDenied = (name) => ENV_DENY.some((pattern) => pattern.test(name));
 // The caller's variables the CLI may see. CLI-home and other wrapper-owned settings are added
 // after this filter in buildCliEnv so inherited and explicitly passed spoofed values lose.
 export function filterCliEnv(source = process.env) {
-  const passthrough = new Set(passthroughNames(source));
-  const allow = new Set(ENV_ALLOW);
+  const fold = IS_WIN ? (name) => name.toUpperCase() : (name) => name;
+  const passthrough = new Set(passthroughNames(source).map(fold));
+  const allow = new Set([...ENV_ALLOW, ...(IS_WIN ? ENV_ALLOW_WINDOWS : [])].map(fold));
   const env = {};
   for (const [name, value] of Object.entries(source)) {
-    if (value === undefined || name === "ZCODE_SESSION_DB") continue;
-    const prefixed = ENV_ALLOW_PREFIXES.some((prefix) => name.startsWith(prefix));
-    if (passthrough.has(name) || allow.has(name) || (prefixed && !isDenied(name))) env[name] = value;
+    if (value === undefined || fold(name) === "ZCODE_SESSION_DB") continue;
+    const key = fold(name);
+    const prefixed = ENV_ALLOW_PREFIXES.some((prefix) => key.startsWith(prefix));
+    if (passthrough.has(key) || allow.has(key) || (prefixed && !isDenied(name))) env[name] = value;
   }
   return env;
 }
@@ -437,7 +480,7 @@ export const hasApiKey = (config) => Boolean(apiKeyRuleOf(config));
 // Structural, independent of key order (a reformatted file still pins the same selection).
 const canonical = (value) =>
   Array.isArray(value) ? value.map(canonical) : isObject(value) ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])])) : value;
-export const isPinned = (config) => JSON.stringify(canonical(pick(config, SELECTION_PATH))) === JSON.stringify(canonical(PINNED_SELECTION));
+export const isPinned = (config, model = DEFAULT_MODEL) => JSON.stringify(canonical(pick(config, SELECTION_PATH))) === JSON.stringify(canonical(MODELS[model].selection));
 
 // A failed write removes its temp copy (it may hold the key); after a successful rename the name is gone.
 function writePrivateJson(file, value) {
@@ -478,16 +521,28 @@ function sweepTempCopies(file) {
 //   Linux — open(2) first, then flock(1) from util-linux locks that descriptor, passed to it as its fd 3: the
 //           lock belongs to the open file description it shares with this process, so it stays after flock(1)
 //           exits.
+//   Windows — by share modes, which CreateFile checks atomically against every open handle of the file. A shared
+//           holder opens it as Node always does (sharing read, write and delete); an exclusive one opens it with
+//           libuv's UV_FS_O_EXLOCK (share mode 0), which fails with EBUSY while any other handle is open and makes
+//           every later open fail while it is. So readers coexist, a writer excludes everyone, and the handle
+//           goes when its process ends — no pid. The handle is not inherited: a run keeps it in the runner, and
+//           the CLI cannot outlive the runner there, because it runs inside the core helper's Job Object, which a
+//           runner that ends takes down with everything in it ("processes" below).
 const LOCK_SHARED = "shared";
 const LOCK_EXCLUSIVE = "exclusive";
 const O_SHLOCK = 0x10; // macOS only: these open(2) flags mean something else, or nothing, elsewhere
 const O_EXLOCK = 0x20;
+const UV_FS_O_EXLOCK = 0x10000000; // Windows only (libuv; Node does not export it in fs.constants)
 const configLockFile = () => `${personalConfigFile()}.lock`;
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-// Why the config lock cannot be taken on this machine, or null.
+// Why the config lock cannot be taken, or (Windows) no CLI can be contained, on this machine; or null.
 function configLockProblem() {
-  if (!SUPPORTED_PLATFORMS.includes(process.platform)) return `${process.platform}: zcode-dispatch supports ${SUPPORTED_PLATFORMS.join(" and ")} only`;
+  if (!SUPPORTED_PLATFORMS.includes(process.platform)) return `${process.platform}: zcode-dispatch supports ${SUPPORTED_PLATFORMS.join(", ")} only`;
+  if (IS_WIN) {
+    const helperProblem = winHelperError();
+    return helperProblem ? `win32: ${helperProblem}; without the process helper no ZCode CLI can be started or stopped` : null;
+  }
   if (process.platform !== "linux") return null;
   const r = spawnSync("flock", ["--version"], { encoding: "utf8" });
   if (r.error || r.status !== 0) return "linux: flock(1) from util-linux is not on PATH; the config lock needs it (e.g. apt install util-linux)";
@@ -510,13 +565,16 @@ function openConfigLock(kind, waitMs) {
   ensurePrivateDir(stateRoot());
   const deadline = Date.now() + waitMs;
   const baseFlags = fs.constants.O_RDWR | fs.constants.O_CREAT;
-  if (process.platform === "darwin") {
-    const flags = baseFlags | fs.constants.O_NONBLOCK | (kind === LOCK_SHARED ? O_SHLOCK : O_EXLOCK);
+  if (process.platform === "darwin" || IS_WIN) {
+    const flags = IS_WIN
+      ? baseFlags | (kind === LOCK_SHARED ? 0 : UV_FS_O_EXLOCK)
+      : baseFlags | fs.constants.O_NONBLOCK | (kind === LOCK_SHARED ? O_SHLOCK : O_EXLOCK);
+    const busy = IS_WIN ? ["EBUSY"] : ["EAGAIN", "EWOULDBLOCK"];
     for (;;) {
       try {
         return fs.openSync(configLockFile(), flags, 0o600);
       } catch (error) {
-        if (error.code !== "EAGAIN" && error.code !== "EWOULDBLOCK") throw error;
+        if (!busy.includes(error.code)) throw error;
         if (Date.now() >= deadline) return null;
         sleepSync(50);
       }
@@ -537,22 +595,38 @@ function openConfigLock(kind, waitMs) {
   return null;
 }
 
-// Replaces (apiKey given) or removes (null) the API-key rule, keeps every other rule, pins PINNED_SELECTION.
-// Under the exclusive config lock, so it is refused while a run holds the shared one. The rule is written in
-// the CLI's canonical shape (providers.toJSON order), so the CLI keeps the file as is.
-export function setApiKeyRule(file, apiKey) {
+// Replaces (apiKey given) or removes (null) the API-key rule in the personal config of every model of MODELS, keeps
+// every other rule, pins each file's own selection. With apiKey undefined (`api-key sync`) it copies the key stored
+// for the default model into the others. Under the exclusive config lock (one lock for all the files), so it is
+// refused while a run holds the shared one. The rule is written in the CLI's canonical shape (providers.toJSON
+// order), so the CLI keeps the file as is. Returns the default model's config.
+export function setApiKeyRule(apiKey) {
   const lockFd = openConfigLock(LOCK_EXCLUSIVE, 2_000);
   if (lockFd === null) {
-    throw new UsageError(`a GLM run (task or probe — its runner or CLI) still holds ${configLockFile()} (see: lsof ${configLockFile()}); store or clear the key after it ends, or cancel the task; nothing changed`);
+    const see = IS_WIN ? "see: zcode-dispatch status" : `see: lsof ${configLockFile()}`;
+    throw new UsageError(`a GLM run (task or probe — its runner or CLI) still holds ${configLockFile()} (${see}); store or clear the key after it ends, or cancel the task; nothing changed`);
   }
   try {
-    return writeApiKeyRule(file, apiKey);
+    let key = apiKey;
+    if (key === undefined) {
+      const rule = apiKeyRuleOf(readPersonalConfig(personalConfigFile()));
+      if (!rule) throw new UsageError(`no Coding Plan API key in ${personalConfigFile()} to copy; the user stores one: zcode-dispatch api-key set (keys: ${API_KEY_MANAGEMENT_URL}); nothing changed`);
+      key = rule.config.access.apiKey;
+    }
+    // Read every file first: one that cannot be read (it may hold a key) stops the command before any write.
+    for (const model of MODEL_IDS) readPersonalConfig(personalConfigFile(model));
+    let first = null;
+    for (const model of MODEL_IDS) {
+      const config = writeApiKeyRule(personalConfigFile(model), key, MODELS[model].selection);
+      first ??= config;
+    }
+    return first;
   } finally {
     fs.closeSync(lockFd);
   }
 }
 
-function writeApiKeyRule(file, apiKey) {
+function writeApiKeyRule(file, apiKey, selection) {
   const config = readPersonalConfig(file);
   if (!isObject(config.config)) config.config = {};
   if (!isObject(config.config.providerConfigRules)) config.config.providerConfigRules = {};
@@ -567,7 +641,7 @@ function writeApiKeyRule(file, apiKey) {
     if (!isObject(node[key])) node[key] = {};
     node = node[key];
   }
-  node[keys.at(-1)] = structuredClone(PINNED_SELECTION);
+  node[keys.at(-1)] = structuredClone(selection);
   sweepTempCopies(file);
   writePrivateJson(file, config);
   return config;
@@ -655,9 +729,30 @@ function isAlive(pid) {
   }
 }
 
+// Windows has no process groups and no signal but TerminateProcess. There the CLI runs under the core's process
+// helper (`agent-proc run`, bin/lib/win/agent-proc.cs) inside a Job Object of its own that allows no breakaway and
+// kills everything in it once its last handle closes: the helper's pid stands for the CLI's process group (childPid),
+// and one TerminateProcess to it ends the CLI and every descendant, also one whose parent has ended. The helper is a
+// plain child of the runner, and Node keeps such children in a kill-on-close job of its own, so a runner that dies
+// takes the whole tree with it. Windows hands out the pid of an ended process again soon, so childStartedAt (the
+// helper's creation time, `ft:<n>`) is recorded with it, and a stored pid is signalled only while that start time
+// still matches; a pid whose start time cannot be read counts as alive and is never signalled. Every signal is
+// TerminateProcess: SIGTERM and SIGKILL are the same there, and the grace periods (TIMEOUT_KILL_GRACE_MS,
+// CANCEL_GRACE_MS) only wait for an exit that has already happened.
+
+// Whether the pid still names the process that started at startedAt: "ours", "gone" or "unknown".
+function winIdentity(pid, startedAt) {
+  if (!isAlive(pid)) return "gone";
+  if (typeof startedAt !== "string" || startedAt === "") return "unknown";
+  const now = processStart(pid, { like: startedAt });
+  if (now === null) return "unknown";
+  return now === startedAt ? "ours" : "gone";
+}
+
 // pid 1 is never a CLI process group, and kill(-1) would signal every process of the user.
-function groupAlive(pid) {
+function groupAlive(pid, startedAt = null) {
   if (!Number.isInteger(pid) || pid <= 1) return false;
+  if (IS_WIN) return winIdentity(pid, startedAt) !== "gone";
   try {
     process.kill(-pid, 0);
     return true;
@@ -666,10 +761,11 @@ function groupAlive(pid) {
   }
 }
 
-function killGroup(pid, signal) {
+function killGroup(pid, signal, startedAt = null) {
   if (!Number.isInteger(pid) || pid <= 1) return;
+  if (IS_WIN && winIdentity(pid, startedAt) !== "ours") return;
   try {
-    process.kill(-pid, signal);
+    process.kill(IS_WIN ? pid : -pid, signal);
   } catch {
     // group already gone
   }
@@ -681,7 +777,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // After a reboot the runnerPid / childPid / holderPid in the state files may name unrelated
 // processes (EPERM for another user's process reads as alive). Job records and reservations store the
 // boot id they were written in (kern.bootsessionuuid on macOS, /proc/sys/kernel/random/boot_id on
-// Linux). Three cases, immune to wall-clock steps (no timestamp is ever evidence):
+// Linux, the core helper's `boot` on Windows). Three cases, immune to wall-clock steps (no timestamp is ever evidence):
 //   current — the stored id equals the readable current id: the usual pid checks and signals apply;
 //   earlier — the stored id differs from the readable current id: dead without any pid check, never
 //             signalled;
@@ -703,6 +799,12 @@ function readBootId() {
     } catch {
       // no boot id: every stamp reads as unknown
     }
+  } else if (IS_WIN) {
+    // The core helper's `boot`: the registry's BootId counter and the creation time of the System process.
+    const helper = winHelper();
+    const r = helper ? spawnSync(helper, ["boot"], { encoding: "utf8", windowsHide: true, timeout: 10_000 }) : null;
+    const id = r && !r.error && r.status === 0 ? r.stdout.trim() : "";
+    if (id && id !== "-") return `win:${id}`;
   }
   return null;
 }
@@ -858,7 +960,7 @@ function cmdReleaseStale(args) {
 
   const job = ID_RE.test(record.jobId ?? "") ? readRecord(jobFile(ws.jobsDir, record.jobId)) : null;
   const jobRebooted = rebooted || (job !== null && bootOf(job.bootId) === "earlier");
-  if (!jobRebooted && job?.childPid && groupAlive(job.childPid)) {
+  if (!jobRebooted && job?.childPid && groupAlive(job.childPid, job.childStartedAt)) {
     throw new UsageError(`workspace reservation generation ${generation} still has live CLI process group ${job.childPid}`);
   }
 
@@ -914,7 +1016,7 @@ function reapDeadRunners(jobsDir) {
       continue;
     }
     if (isAlive(record.runnerPid)) continue;
-    if (boot === "current") killGroup(record.childPid, "SIGKILL");
+    if (boot === "current") killGroup(record.childPid, "SIGKILL", record.childStartedAt);
     const after = finalizeRecord(file, { status: "failed", errorClass: "crash", note: "runner died" });
     if (after?.note === "runner died") {
       appendLog(logFile(jobsDir, record.id), boot === "current" ? "runner died; liveness check marked the job failed/crash" : `runner died; liveness check marked the job failed/crash; CLI process group ${record.childPid} ${UNKNOWN_BOOT_NOTE}`);
@@ -946,14 +1048,14 @@ export function buildCliArgv({ bin, prompt, workspaceRoot, sessionId }) {
   return argv;
 }
 
-function buildCliEnv(paths, appVersion) {
+function buildCliEnv(paths, appVersion, model) {
   const env = {
     ...filterCliEnv(process.env),
     ...MODEL_ENV,
     ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: paths.providerConfig,
     ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE: paths.providerConfig,
     ZCODE_APP_VERSION: appVersion,
-    ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalConfigFile(),
+    ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalConfigFile(model),
     ...cliHomeEnv(),
   };
   // The CLI also reads ZCODE_SESSION_DB as an alias of ZCODE_SESSION_DB_PATH; an inherited one could win.
@@ -967,9 +1069,10 @@ function summarizeArgv(argv) {
     .join(" ");
 }
 
-// Runs the CLI as its own process group; resolves once it has exited and its output is drained.
-// `redact` (keyRedactor) is applied to everything the wrapper keeps: stderr is handled line by line,
-// so a key split across chunks is still caught before it reaches the log or stderrTail.
+// Runs the CLI as its own process group (Windows: under the core helper, whose pid stands for the group; extraFds are
+// not passed there); resolves once it has exited and its output is drained. onSpawn gets the group's pid and, on
+// Windows, the helper's start time; when it returns false the CLI is stopped at once. `redact` (keyRedactor) is applied to everything the wrapper keeps: stderr is
+// handled line by line, so a key split across chunks is still caught before it reaches the log or stderrTail.
 function runCli({ node, argv, cwd, env, stdinText, timeoutMs, logPath, onSpawn, redact = (text) => text, extraFds = [] }) {
   return new Promise((resolve) => {
     let stdout = "";
@@ -995,13 +1098,15 @@ function runCli({ node, argv, cwd, env, stdinText, timeoutMs, logPath, onSpawn, 
     let killTimer = null;
     let closeTimer = null;
     let child = null;
+    let winDir = null; // Windows: the private dir of the helper's --cmdline-file (the prompt travels in it)
     const finish = () => {
       if (settled) return;
       settled = true;
+      if (winDir) fs.rmSync(winDir, { recursive: true, force: true });
       clearTimeout(timer);
       clearTimeout(killTimer);
       clearTimeout(closeTimer);
-      if (timedOut && child?.pid) killGroup(child.pid, "SIGKILL");
+      if (timedOut && child?.pid) stopChild("SIGKILL");
       keepErr(redact(pendingErr));
       pendingErr = "";
       // A descendant that keeps the pipes open after the CLI exited must not append to the log any more.
@@ -1009,8 +1114,20 @@ function runCli({ node, argv, cwd, env, stdinText, timeoutMs, logPath, onSpawn, 
       child?.stderr?.destroy();
       resolve({ timedOut, spawnError, exitCode, signal, stdout: redact(stdout), stderrTail: stderr.split("\n").slice(-200).join("\n") });
     };
+    // The runner's own child: on Windows child.kill() is TerminateProcess to the helper, which takes the whole job.
+    const stopChild = (signal) => (IS_WIN ? child.kill() : killGroup(child.pid, signal));
     try {
-      child = spawn(node, argv, { cwd, env, detached: true, stdio: [stdinText === null ? "ignore" : "pipe", "pipe", "pipe", ...extraFds] });
+      const stdin = stdinText === null ? "ignore" : "pipe";
+      if (IS_WIN) {
+        const helper = winHelper();
+        if (!helper) throw Object.assign(new Error(`the Windows process helper is unavailable: ${winHelperError()}`), { code: "ESUPERVISOR" });
+        // The executable is found on the CLI environment's PATH, never in the working directory.
+        winDir = fs.mkdtempSync(path.join(os.tmpdir(), "zcode-run-"));
+        const invocation = windowsInvocation([node, ...argv], env, cwd, { cmdlineFile: path.join(winDir, "cmdline.txt") });
+        child = spawn(helper, ["run", ...invocation], { cwd, env, windowsHide: true, stdio: [stdin, "pipe", "pipe"] });
+      } else {
+        child = spawn(node, argv, { cwd, env, detached: true, stdio: [stdin, "pipe", "pipe", ...extraFds] });
+      }
     } catch (error) {
       spawnError = error;
       finish();
@@ -1020,7 +1137,8 @@ function runCli({ node, argv, cwd, env, stdinText, timeoutMs, logPath, onSpawn, 
       spawnError = error;
       finish();
     });
-    if (child.pid) onSpawn?.(child.pid);
+    // onSpawn returns false when the job was cancelled meanwhile: the child is stopped through its own handle.
+    if (child.pid && onSpawn?.(child.pid, IS_WIN ? processStart(child.pid) : null) === false) stopChild("SIGTERM");
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
@@ -1045,9 +1163,9 @@ function runCli({ node, argv, cwd, env, stdinText, timeoutMs, logPath, onSpawn, 
     }
     timer = setTimeout(() => {
       timedOut = true;
-      if (logPath) appendLog(logPath, `timeout after ${timeoutMs} ms: SIGTERM to process group ${child.pid}`);
-      killGroup(child.pid, "SIGTERM");
-      killTimer = setTimeout(() => killGroup(child.pid, "SIGKILL"), TIMEOUT_KILL_GRACE_MS);
+      if (logPath) appendLog(logPath, `timeout after ${timeoutMs} ms: ${IS_WIN ? "TerminateProcess to the process helper" : "SIGTERM to process group"} ${child.pid}`);
+      stopChild("SIGTERM");
+      killTimer = setTimeout(() => stopChild("SIGKILL"), TIMEOUT_KILL_GRACE_MS);
     }, timeoutMs);
     child.on("exit", (code, sig) => {
       exitCode = code;
@@ -1103,8 +1221,8 @@ function reportedModelOf(json) {
   return typeof value === "string" ? value : null;
 }
 
-function reportedMatchesPin(reported) {
-  const [pinnedId, pinnedLevel] = PINNED_MODEL.split("$");
+function reportedMatchesPin(reported, model) {
+  const [pinnedId, pinnedLevel] = pinOf(model).split("$");
   const [id, level] = reported.slice(reported.lastIndexOf("/") + 1).split("$");
   return id === pinnedId && (level === undefined || level === pinnedLevel);
 }
@@ -1133,14 +1251,24 @@ function checkPromptFile(value) {
     throw new UsageError(`prompt file not found or unreadable: ${file}`);
   }
   if (text.trim().length === 0) throw new UsageError(`prompt file is empty: ${file}`);
-  const bytes = Buffer.byteLength(text);
-  if (PROMPT_TRANSPORT === "argv" && bytes > MAX_PROMPT_BYTES) {
-    throw new UsageError(`prompt file is ${bytes} bytes, above MAX_PROMPT_BYTES=${MAX_PROMPT_BYTES} for the argv transport`);
-  }
+  const tooLong = promptTooLong(text);
+  if (tooLong) throw new UsageError(`prompt file ${tooLong}`);
   return file;
 }
 
-function resolveResume(jobsDir, ref) {
+// Why this prompt cannot travel as the -p argument, or null. Windows counts UTF-16 units, plus one per quote and
+// backslash that quoting may double (quoteWindowsArg); elsewhere bytes.
+export function promptTooLong(text, platform = process.platform) {
+  if (PROMPT_TRANSPORT !== "argv") return null;
+  if (platform === "win32") {
+    const units = text.length + (text.match(/["\\]/g) ?? []).length;
+    return units > MAX_PROMPT_UNITS_WIN ? `is ${units} UTF-16 units, above the ${MAX_PROMPT_UNITS_WIN} a Windows command line takes for the argv transport` : null;
+  }
+  const bytes = Buffer.byteLength(text);
+  return bytes > MAX_PROMPT_BYTES ? `is ${bytes} bytes, above MAX_PROMPT_BYTES=${MAX_PROMPT_BYTES} for the argv transport` : null;
+}
+
+function resolveResume(jobsDir, ref, requestedModel) {
   if (!ID_RE.test(ref)) throw new UsageError(`${ref} is not a zcode-dispatch job id (zt-NNNN); Codex task- ids belong to codex-dispatch`);
   const record = readRecord(jobFile(jobsDir, ref));
   if (!record) throw new UsageError(`unknown job ${ref} in this workspace (pass the same --cwd as the original task)`);
@@ -1148,7 +1276,10 @@ function resolveResume(jobsDir, ref) {
   if (record.status !== "completed" || !record.sessionId) throw new UsageError(`job ${ref} is ${record.status} / has no session; dispatch --fresh`);
   // A resumed session keeps the provider it started on; one from before 0.10.0 ran on the OAuth account provider.
   if (record.provider !== PINNED_SELECTION.providerId) throw new UsageError(`job ${ref} ran on ${record.provider ?? "the OAuth account provider"}, not ${PINNED_SELECTION.providerId}; its session cannot move to the API key; dispatch --fresh`);
-  return { resumeOf: ref, sessionId: record.sessionId };
+  // A session keeps the model it started on (U1): a resume runs on that model; an explicit other --model is refused.
+  const model = modelOfRecord(record);
+  if (requestedModel !== undefined && requestedModel !== model) throw new UsageError(`job ${ref} ran on ${model}, not ${requestedModel}; a session keeps its model; dispatch --fresh`);
+  return { resumeOf: ref, sessionId: record.sessionId, model };
 }
 
 async function cmdTask(args) {
@@ -1160,10 +1291,12 @@ async function cmdTask(args) {
       "resume-task": { type: "string" },
       fresh: { type: "boolean" },
       "prompt-file": { type: "string" },
+      model: { type: "string" },
     },
     0,
   );
   if (!values.background) throw new UsageError("task requires --background (there is no foreground mode)");
+  const requestedModel = values.model !== undefined ? resolveModel(values.model) : undefined;
   if (values["resume-task"] !== undefined && values.fresh) throw new UsageError("--resume-task and --fresh are mutually exclusive");
   if (process.env.SP_IMPLEMENTER === "luna") throw new UsageError("SP_IMPLEMENTER=luna is set: the GLM channel is switched off (kill switch)");
   passthroughNames(); // refuse invalid names before any job or reservation state is written
@@ -1177,17 +1310,19 @@ async function cmdTask(args) {
   if (!appVersion) throw new UsageError(`cannot read ${paths.version.label}; refusing to run with an unknown client version`);
   if (!fs.existsSync(paths.bin)) throw new UsageError(`ZCode CLI not found: ${paths.bin}`);
   if (!fs.existsSync(paths.providerConfig)) throw new UsageError(`ZCode provider config not found: ${paths.providerConfig}`);
+  const resume = values["resume-task"] !== undefined ? resolveResume(ws.jobsDir, values["resume-task"], requestedModel) : { resumeOf: null, sessionId: null, model: requestedModel ?? DEFAULT_MODEL };
+  const model = resume.model;
+  const pcfg = personalConfigFile(model);
   let configured;
   try {
-    configured = readPersonalConfig(personalConfigFile());
+    configured = readPersonalConfig(pcfg);
   } catch (error) {
     throw new UsageError(error.message);
   }
-  if (!hasApiKey(configured)) throw new UsageError(`no Coding Plan API key is configured in ${personalConfigFile()}; the user stores one: zcode-dispatch api-key set (keys: ${API_KEY_MANAGEMENT_URL})`);
-  if (!isPinned(configured)) throw new UsageError(`${personalConfigFile()} does not pin ${PINNED_MODEL} via ${PINNED_SELECTION.providerId}; the user re-pins it: zcode-dispatch api-key set`);
+  if (!hasApiKey(configured)) throw new UsageError(`no Coding Plan API key is configured in ${pcfg}; the user stores one: zcode-dispatch api-key set (keys: ${API_KEY_MANAGEMENT_URL})${model !== DEFAULT_MODEL ? `, or copies the stored one to ${model}: zcode-dispatch api-key sync` : ""}`);
+  if (!isPinned(configured, model)) throw new UsageError(`${pcfg} does not pin ${pinOf(model)} via ${PINNED_SELECTION.providerId}; the user re-pins it: zcode-dispatch api-key ${model !== DEFAULT_MODEL ? "sync" : "set"}`);
   const templateProblem = apiKeyTemplateProblem(paths.providerConfig);
   if (templateProblem) throw new UsageError(`a Coding Plan API key is configured, but ${templateProblem}`);
-  const resume = values["resume-task"] !== undefined ? resolveResume(ws.jobsDir, values["resume-task"]) : { resumeOf: null, sessionId: null };
   const timeoutMin = readTimeoutMin();
   const id = nextJobId(ws.jobsDir);
   const reservation = acquireReservation(ws.jobsDir, id, ws.root);
@@ -1203,12 +1338,13 @@ async function cmdTask(args) {
       resumeOf: resume.resumeOf,
       workspaceRoot: ws.root,
       promptFile,
-      model: PINNED_MODEL,
+      model: pinOf(model),
       provider: PINNED_SELECTION.providerId,
       reportedModel: null,
       appVersion,
       runnerPid: null,
       childPid: null,
+      childStartedAt: null,
       startedAt: new Date().toISOString(),
       bootId: bootId(),
       finishedAt: null,
@@ -1225,6 +1361,7 @@ async function cmdTask(args) {
       runner = spawn(process.execPath, [SELF, "__run", id, ws.jobsDir, reservation.token], {
         cwd: ws.root,
         detached: true,
+        windowsHide: true,
         stdio: ["ignore", logFd, logFd],
         env: process.env,
       });
@@ -1268,12 +1405,20 @@ async function runJob(id, jobsDir, token) {
       finalizeRecord(file, { status: "failed", errorClass: "launch", note: `cannot read prompt file: ${error.message}` });
       return 1;
     }
+    // The file may have grown since task checked it; a truncated prompt is never sent.
+    const tooLong = promptTooLong(prompt);
+    if (tooLong) {
+      finalizeRecord(file, { status: "failed", errorClass: "launch", note: `the prompt ${tooLong}` });
+      return 1;
+    }
+    const model = modelOfRecord(record);
+    const pcfg = personalConfigFile(model);
     let pinned;
     try {
       configLockFd = openConfigLock(LOCK_SHARED, 10_000);
       if (configLockFd === null) throw new Error("an api-key command holds the config lock; retry");
-      securePersonalConfig(personalConfigFile());
-      pinned = readPersonalConfig(personalConfigFile());
+      securePersonalConfig(pcfg);
+      pinned = readPersonalConfig(pcfg);
     } catch (error) {
       finalizeRecord(file, { status: "failed", errorClass: "launch", note: `cannot read the personal provider config: ${error.message}` });
       return 1;
@@ -1283,8 +1428,8 @@ async function runJob(id, jobsDir, token) {
       finalizeRecord(file, { status: "failed", errorClass: "auth", note: "no Coding Plan API key in the personal provider config (cleared after the task was queued?); the user stores one: zcode-dispatch api-key set" });
       return 1;
     }
-    if (!isPinned(pinned)) {
-      finalizeRecord(file, { status: "failed", errorClass: "model-not-selected", note: `the personal provider config does not pin ${PINNED_MODEL} via ${PINNED_SELECTION.providerId}; the user re-pins it: zcode-dispatch api-key set` });
+    if (!isPinned(pinned, model)) {
+      finalizeRecord(file, { status: "failed", errorClass: "model-not-selected", note: `the personal provider config ${pcfg} does not pin ${pinOf(model)} via ${PINNED_SELECTION.providerId}; the user re-pins it: zcode-dispatch api-key ${model !== DEFAULT_MODEL ? "sync" : "set"}` });
       return 1;
     }
     try {
@@ -1296,7 +1441,7 @@ async function runJob(id, jobsDir, token) {
     const paths = zcodePaths();
     let env;
     try {
-      env = buildCliEnv(paths, record.appVersion);
+      env = buildCliEnv(paths, record.appVersion, model);
     } catch (error) {
       finalizeRecord(file, { status: "failed", errorClass: "launch", note: error.message });
       return 1;
@@ -1304,7 +1449,7 @@ async function runJob(id, jobsDir, token) {
     const argv = buildCliArgv({ bin: paths.bin, prompt, workspaceRoot: record.workspaceRoot, sessionId: record.resumeOf ? record.sessionId : null });
     appendLog(log, `start ${id}: ${JSON.stringify(paths.node)} ${summarizeArgv(argv)}`);
     appendLog(log, describeCliEnv(env));
-    const redact = keyRedactor(personalConfigFile(), pinned);
+    const redact = keyRedactor(pcfg, pinned);
     const result = await runCli({
       node: paths.node,
       argv,
@@ -1314,10 +1459,10 @@ async function runJob(id, jobsDir, token) {
       stdinText: PROMPT_TRANSPORT === "stdin" ? prompt : null,
       timeoutMs: record.timeoutMin * 60_000,
       logPath: log,
-      extraFds: [configLockFd], // fd 3: the CLI keeps the shared config lock, also if this runner dies
-      onSpawn: (pid) => {
-        if (!updateRunning(file, { childPid: pid })) killGroup(pid, "SIGTERM"); // cancelled meanwhile
-      },
+      // fd 3: the CLI keeps the shared config lock, also if this runner dies (POSIX; on Windows the CLI cannot
+      // outlive the runner, see "the config lock")
+      extraFds: [configLockFd],
+      onSpawn: (pid, startedAt) => updateRunning(file, { childPid: pid, childStartedAt: startedAt }) !== null, // false: cancelled meanwhile
     });
     const verdict = evaluate(result);
     const patch = { status: verdict.status, errorClass: verdict.errorClass, exitCode: result.exitCode, signal: result.signal };
@@ -1395,22 +1540,30 @@ async function cmdCancel(args) {
     process.stdout.write(`${record.id} is ${after.status}\n`);
     return 0;
   }
+  const check = IS_WIN ? `tasklist /FI "PID eq ${after.childPid ?? "<pid>"}"` : `ps -g ${after.childPid ?? "<pgid>"}`;
   if (bootOf(record.bootId) !== "current") {
     appendLog(logFile(ws.jobsDir, record.id), `cancel: record set to cancelled; CLI process group ${after.childPid} ${UNKNOWN_BOOT_NOTE}`);
-    process.stdout.write(`cancelled ${record.id} (CLI process group ${after.childPid ?? "-"} ${UNKNOWN_BOOT_NOTE}; check it with: ps -g ${after.childPid ?? "<pgid>"})\n`);
+    process.stdout.write(`cancelled ${record.id} (CLI process group ${after.childPid ?? "-"} ${UNKNOWN_BOOT_NOTE}; check it with: ${check})\n`);
     return 0;
   }
-  appendLog(logFile(ws.jobsDir, record.id), "cancel: record set to cancelled; SIGTERM to the CLI process group");
-  killGroup(after.childPid, "SIGTERM");
+  // On Windows the record must also name the helper's start time: a pid alone may be a stranger's by now.
+  if (IS_WIN && after.childPid && groupAlive(after.childPid, after.childStartedAt) && !after.childStartedAt) {
+    appendLog(logFile(ws.jobsDir, record.id), `cancel: record set to cancelled; process helper ${after.childPid} not stopped: its start time was not recorded`);
+    process.stdout.write(`cancelled ${record.id} (process helper ${after.childPid} not stopped: its start time was not recorded; check it with: ${check})\n`);
+    return 0;
+  }
+  appendLog(logFile(ws.jobsDir, record.id), `cancel: record set to cancelled; ${IS_WIN ? "TerminateProcess to the process helper (the CLI's Job Object)" : "SIGTERM to the CLI process group"}`);
+  killGroup(after.childPid, "SIGTERM", after.childStartedAt);
   const deadline = Date.now() + CANCEL_GRACE_MS;
-  while (groupAlive(after.childPid) && Date.now() < deadline) await sleep(200);
-  if (groupAlive(after.childPid)) killGroup(after.childPid, "SIGKILL");
+  while (groupAlive(after.childPid, after.childStartedAt) && Date.now() < deadline) await sleep(200);
+  if (groupAlive(after.childPid, after.childStartedAt)) killGroup(after.childPid, "SIGKILL", after.childStartedAt);
   process.stdout.write(`cancelled ${record.id}\n`);
   return 0;
 }
 
 async function cmdDoctor(args) {
-  const { values } = parse(args, { cwd: { type: "string" }, probe: { type: "boolean" } }, 0);
+  const { values } = parse(args, { cwd: { type: "string" }, probe: { type: "boolean" }, model: { type: "string" } }, 0);
+  const probeModel = resolveModel(values.model);
   const cwd = path.resolve(values.cwd ?? process.cwd());
   const paths = zcodePaths();
   const lines = [];
@@ -1422,6 +1575,7 @@ async function cmdDoctor(args) {
 
   const platformProblem = configLockProblem();
   if (platformProblem) report("FAIL", "platform", platformProblem);
+  else if (IS_WIN) report("ok", "platform", `win32 (config lock: exclusive file handles; each CLI run in a Job Object of the process helper ${winHelper()}; a stop is TerminateProcess, no polite signal)`);
   else report("ok", "platform", process.platform === "linux" ? "linux (config lock: flock(1))" : process.platform);
   const appVersion = readAppVersion(paths.version);
   if (appVersion) report("ok", "app", `${paths.app} ${appVersion}`);
@@ -1467,6 +1621,22 @@ async function cmdDoctor(args) {
   } catch (error) {
     report("FAIL", "personal-config", `cannot read ${personalConfigFile()}: ${error.message}`);
   }
+  // Every other model: WARN while it is not set up (the default model still runs), FAIL when --model names it.
+  for (const model of MODEL_IDS.filter((id) => id !== DEFAULT_MODEL)) {
+    const file = personalConfigFile(model);
+    const level = model === probeModel ? "FAIL" : "WARN";
+    const check = `personal-config ${model}`;
+    try {
+      securePersonalConfig(file);
+      const current = fs.existsSync(file) ? readPersonalConfig(file) : null;
+      if (!current) report(level, check, `${file} does not exist: --model ${model} is not set up; the user copies the stored key to it: zcode-dispatch api-key sync`);
+      else if (!hasApiKey(current)) report(level, check, `no Coding Plan API key in ${file}; the user copies the stored one: zcode-dispatch api-key sync`);
+      else if (!isPinned(current, model)) report(level, check, `${file} does not pin ${pinOf(model)} via ${PINNED_SELECTION.providerId}; the user re-pins it: zcode-dispatch api-key sync`);
+      else report("ok", check, `${file} pins ${pinOf(model)} via ${PINNED_SELECTION.providerId}`);
+    } catch (error) {
+      report(level, check, `cannot read ${file}: ${error.message}`);
+    }
+  }
   if (keyed === true) {
     const problem = apiKeyTemplateProblem(paths.providerConfig);
     if (problem) report("FAIL", "auth", `ZCode template incompatible: a Coding Plan API key is stored, but ${problem}; a new key does not help — the wrapper needs an update for this ZCode`);
@@ -1491,29 +1661,30 @@ async function cmdDoctor(args) {
   process.stdout.write(`${lines.join("\n")}\ndoctor: ${failed ? "FAIL" : "ok"}\n`);
   if (failed) return 1;
   if (!values.probe) return 0;
-  return await runProbe(paths, appVersion, ws.root);
+  return await runProbe(paths, appVersion, ws.root, probeModel);
 }
 
 // One synchronous PONG request: the only diagnostic that spends quota.
-async function runProbe(paths, appVersion, root) {
+async function runProbe(paths, appVersion, root, model) {
   const configLockFd = openConfigLock(LOCK_SHARED, 10_000);
   if (configLockFd === null) throw new Error("an api-key command holds the config lock; retry doctor --probe");
   try {
-    return await probeWithLock(paths, appVersion, root, configLockFd);
+    return await probeWithLock(paths, appVersion, root, configLockFd, model);
   } finally {
     fs.closeSync(configLockFd);
   }
 }
 
-async function probeWithLock(paths, appVersion, root, configLockFd) {
-  securePersonalConfig(personalConfigFile());
-  const pinned = readPersonalConfig(personalConfigFile());
+async function probeWithLock(paths, appVersion, root, configLockFd, model) {
+  const pcfg = personalConfigFile(model);
+  securePersonalConfig(pcfg);
+  const pinned = readPersonalConfig(pcfg);
   // Under the shared lock the file cannot change before the CLI reads it, but an api-key clear may have run
   // since the offline checks: without the key or the pin the CLI would fall back to another model.
-  const missing = !hasApiKey(pinned) ? "auth" : !isPinned(pinned) ? "model-not-selected" : null;
+  const missing = !hasApiKey(pinned) ? "auth" : !isPinned(pinned, model) ? "model-not-selected" : null;
   if (missing) {
     process.stdout.write(`model-selected: FAIL(${missing})\nanswers: FAIL\nreported-model: unreported\nusage: input=- cached=- output=-\nprobe: FAIL\n`);
-    process.stderr.write(`hint: ${missing === "auth" ? "no Coding Plan API key is stored" : `the personal provider config does not pin ${PINNED_MODEL}`}; the user runs: zcode-dispatch api-key set (keys: ${API_KEY_MANAGEMENT_URL})\n`);
+    process.stderr.write(`hint: ${missing === "auth" ? "no Coding Plan API key is stored" : `the personal provider config does not pin ${pinOf(model)}`}; the user runs: zcode-dispatch api-key ${model !== DEFAULT_MODEL ? "sync" : `set (keys: ${API_KEY_MANAGEMENT_URL})`}\n`);
     return 1;
   }
   ensureCliHome();
@@ -1522,11 +1693,11 @@ async function probeWithLock(paths, appVersion, root, configLockFd) {
     node: paths.node,
     argv,
     cwd: root,
-    env: buildCliEnv(paths, appVersion),
+    env: buildCliEnv(paths, appVersion, model),
     stdinText: PROMPT_TRANSPORT === "stdin" ? PROBE_PROMPT : null,
     timeoutMs: PROBE_TIMEOUT_MS,
     logPath: null,
-    redact: keyRedactor(personalConfigFile(), pinned),
+    redact: keyRedactor(pcfg, pinned),
     extraFds: [configLockFd],
   });
   const verdict = evaluate(result);
@@ -1534,7 +1705,7 @@ async function probeWithLock(paths, appVersion, root, configLockFd) {
   const modelSelected = verdict.status === "completed";
   const answers = modelSelected && json.response.includes("PONG");
   const reported = json ? reportedModelOf(json) : null;
-  const modelMatches = reported === null || reportedMatchesPin(reported);
+  const modelMatches = reported === null || reportedMatchesPin(reported, model);
   const usage = json?.usage ?? {};
   const count = (field) => {
     const value = field ? pick(usage, field) : undefined;
@@ -1543,7 +1714,7 @@ async function probeWithLock(paths, appVersion, root, configLockFd) {
   const ok = modelSelected && answers && modelMatches;
   process.stdout.write(
     [
-      `model-selected: ${modelSelected ? "ok" : `FAIL(${verdict.errorClass})`}`,
+      `model-selected: ${modelSelected ? `ok (${pinOf(model)})` : `FAIL(${verdict.errorClass})`}`,
       `answers: ${answers ? "ok" : "FAIL"}`,
       `reported-model: ${reported ?? "unreported"}`,
       `usage: input=${count(USAGE_FIELDS.input)} cached=${count(USAGE_FIELDS.cached)} output=${count(USAGE_FIELDS.output)}`,
@@ -1553,7 +1724,7 @@ async function probeWithLock(paths, appVersion, root, configLockFd) {
   if (!modelSelected && result.stderrTail.trim()) process.stderr.write(`${result.stderrTail.split("\n").slice(-20).join("\n")}\n`);
   if (verdict.errorClass === "auth" || verdict.errorClass === "model-not-selected") {
     process.stderr.write(
-      `hint: the ZCode CLI could not use the Coding Plan API key in ${personalConfigFile()} (revoked, mistyped, its plan has no GLM access, or this ZCode version treats the zai-api template differently); store a valid one: zcode-dispatch api-key set (keys: ${API_KEY_MANAGEMENT_URL})\n`,
+      `hint: the ZCode CLI could not use the Coding Plan API key in ${pcfg} (revoked, mistyped, its plan has no GLM access, or this ZCode version treats the zai-api template differently); store a valid one: zcode-dispatch api-key set (keys: ${API_KEY_MANAGEMENT_URL})\n`,
     );
   }
   return ok ? 0 : 1;
@@ -1606,13 +1777,22 @@ async function cmdApiKey(args) {
   // Arguments are never echoed: a key typed as an argument must not reach stderr (parse() would print it).
   const [action, ...rest] = args;
   if (action === "set" && rest.length > 0) throw new UsageError("api-key set takes the key on stdin, never as an argument (e.g. pbpaste | zcode-dispatch api-key set, or xclip -o -selection clipboard | … on Linux); nothing stored");
+  const files = MODEL_IDS.map((model) => personalConfigFile(model)).join(", ");
   if (action === "clear") {
     if (rest.length > 0) throw new UsageError("usage: zcode-dispatch api-key clear (no arguments)");
-    setApiKeyRule(personalConfigFile(), null);
-    process.stdout.write(`api-key: cleared from ${personalConfigFile()}; the GLM channel is off until a key is stored again (zcode-dispatch api-key set)\n`);
+    setApiKeyRule(null);
+    process.stdout.write(`api-key: cleared from ${files}; the GLM channel is off until a key is stored again (zcode-dispatch api-key set)\n`);
     return 0;
   }
-  if (action !== "set") throw new UsageError("usage: zcode-dispatch api-key <set|clear> (set reads the key on stdin)");
+  if (action === "sync") {
+    if (rest.length > 0) throw new UsageError("usage: zcode-dispatch api-key sync (no arguments; copies the stored key to every model)");
+    const problem = apiKeyTemplateProblem(zcodePaths().providerConfig);
+    if (problem) throw new UsageError(`cannot use a Coding Plan API key with this ZCode: ${problem}`);
+    setApiKeyRule(undefined);
+    process.stdout.write(`api-key: the stored key now also serves ${MODEL_IDS.filter((id) => id !== DEFAULT_MODEL).join(", ")}; files ${files} (mode 0600), each pinned to its model (${MODEL_IDS.map(pinOf).join(", ")}); check one with: zcode-dispatch doctor --probe --model <id>\n`);
+    return 0;
+  }
+  if (action !== "set") throw new UsageError("usage: zcode-dispatch api-key <set|sync|clear> (set reads the key on stdin)");
   const paths = zcodePaths();
   const problem = apiKeyTemplateProblem(paths.providerConfig);
   if (problem) throw new UsageError(`cannot use a Coding Plan API key with this ZCode: ${problem}`);
@@ -1627,9 +1807,9 @@ async function cmdApiKey(args) {
       `stdin is not one API key: got ${key.length} characters on ${lines} line(s), ${spaces} space(s), ${other} other character(s) outside A–Z a–z 0–9 . _ - (expected 8–${API_KEY_MAX} of those on one line); nothing stored. If the clipboard held this command rather than the key, run "zcode-dispatch api-key set" without a pipe and paste the key at the hidden prompt`,
     );
   }
-  setApiKeyRule(personalConfigFile(), key);
+  setApiKeyRule(key);
   process.stdout.write(
-    `api-key: stored in ${personalConfigFile()} (mode 0600) as provider ${API_KEY_PROVIDER_ID} from ZCode's template ${API_KEY_TEMPLATE_ID}; pinned to ${PINNED_MODEL}; check it with: zcode-dispatch doctor --probe\n`,
+    `api-key: stored in ${personalConfigFile()} (mode 0600) as provider ${API_KEY_PROVIDER_ID} from ZCode's template ${API_KEY_TEMPLATE_ID}; pinned to ${PINNED_MODEL}; also in ${MODEL_IDS.filter((id) => id !== DEFAULT_MODEL).map((id) => `${personalConfigFile(id)} (${pinOf(id)})`).join(", ")}; check it with: zcode-dispatch doctor --probe\n`,
   );
   return 0;
 }

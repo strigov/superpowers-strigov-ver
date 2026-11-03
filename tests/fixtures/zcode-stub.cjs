@@ -5,7 +5,8 @@
 // ZCODE_STUB_RECORD: file the `record` mode writes, including envAll and
 // `resolved`, the stub's model of where the CLI keeps its state; ZCODE_STUB_DELAY_MS: wait before acting;
 // ZCODE_STUB_MESSAGE: stderr text for the four error modes; ZCODE_STUB_TERM_DELAY_MS: how long ignore-term waits after SIGTERM before exiting;
-// ZCODE_STUB_EXIT: the exit code of the `leak` mode (default 0).
+// ZCODE_STUB_EXIT: the exit code of the `leak` mode (default 0); ZCODE_STUB_PIDFILE: a file the stub (and the
+// lingering descendant of `linger`) appends its pid to.
 // Tests explicitly list ZCODE_STUB_* in ZCODE_ENV_PASSTHROUGH because the wrapper filters the CLI env.
 "use strict";
 const fs = require("node:fs");
@@ -14,6 +15,7 @@ const path = require("node:path");
 
 const argv = process.argv.slice(2);
 const mode = process.env.ZCODE_STUB_MODE || "ok";
+if (process.env.ZCODE_STUB_PIDFILE) fs.appendFileSync(process.env.ZCODE_STUB_PIDFILE, `${process.pid}\n`);
 if (mode === "ignore-term") {
   process.on("SIGTERM", () => setTimeout(() => process.exit(0), Number(process.env.ZCODE_STUB_TERM_DELAY_MS || 2000)));
 }
@@ -126,6 +128,7 @@ async function run() {
       // $ZCODE_STUB_DONE and exits.
       const script = `
         const fs = require("node:fs");
+        if (process.env.ZCODE_STUB_PIDFILE) fs.appendFileSync(process.env.ZCODE_STUB_PIDFILE, process.pid + "\\n");
         process.stderr.on("error", () => {});
         const tick = setInterval(() => {
           if (!fs.existsSync(process.env.ZCODE_STUB_GO)) return;
