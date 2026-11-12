@@ -163,6 +163,7 @@ Steps that touch only documentation, or only test code working inside a temporar
 - **YAGNI**: only what the user asked for. No speculative flags, extra abstractions, or "nice to have" features.
 - **DRY**: don't invent new abstractions; reuse what exists.
 - **TDD-friendly**: tests should be writable before or alongside implementation, not as an afterthought.
+- **Decisions, not code**: the implementer reads the repository and writes the code; the plan fixes what it must do. Each step states behavior, the contract it implements, and its test cases (name, input or setup, expected outcome). Write code only where it is itself the decision — signatures and data shapes (once, in `## Contracts`), exact externally visible strings and formats, or a tricky fragment of at most ~15 lines whose exact form matters. Never write function bodies, whole files, or full test code.
 - **Single responsibility per file**: no god-files created.
 - **In existing codebases**: follow established patterns. Don't unilaterally restructure unrelated code.
 - **Acceptance-criteria gate**: the `## Acceptance criteria` section is the reviewer's sole authority for blocking on missing requirements; `## Non-goals / deferred` is the explicit defer-list. Together they bound the reviewer's mandate — any reviewer finding outside these sections must be classified `DEFER` or `REJECTED_BY_SCOPE`, never `MUST_FIX_NOW`, unless it clears the high-materiality bar.

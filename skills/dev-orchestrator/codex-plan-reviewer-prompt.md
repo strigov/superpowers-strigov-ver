@@ -92,6 +92,8 @@ Use exactly one class per finding:
 
 A plan step that names a function, module, path, or CLI flag which does not exist in the repository (and which no earlier phase creates) is `MUST_FIX_NOW` (`GUARANTEED_FAIL`).
 
+The plan deliberately carries no implementation code: steps state behavior, contracts, and test cases, and the implementer writes the code. Never ask for function bodies, whole files, or full test code — a missing code block is at most `NIT`. A step whose behavior, interface, or test cases are too vague to implement without guessing is a finding on its own merits (classify it by the criteria above).
+
 If the frontmatter marks phases with a shared `parallel_group`, additionally verify: their `## Files` sets are fully disjoint, and neither phase uses anything from the other beyond contracts frozen in `## Contracts`. A violated parallel_group is `MUST_FIX_NOW` (`GUARANTEED_FAIL` — the phases are built concurrently in separate worktrees and merged; overlap or implementation dependency guarantees a broken merge). A group with 3+ phases is also `MUST_FIX_NOW` (orchestrator supports exactly 2).
 
 **Risk tags (`risk_phases`).** The orchestrator picks each phase's implementer from the frontmatter `risk_phases` map alone: a phase with a non-empty value runs inside the Codex sandbox, a phase with `[]` normally runs on an unsandboxed model. Check the map like a contract — every plan must carry it, even when no phase is risky. Walk every phase's steps through the checklist below, then apply these rules in order:
