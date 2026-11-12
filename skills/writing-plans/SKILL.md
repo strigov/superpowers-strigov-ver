@@ -10,9 +10,9 @@ disable-model-invocation: true
 
 ## Overview
 
-Write comprehensive implementation plans assuming the engineer has zero context for our codebase and questionable taste. Document everything they need to know: which files to touch in each phase, code, testing, docs they might need to check, how to test it. Decompose into 2–5 phases of bite-sized TDD steps. DRY. YAGNI. TDD. Frequent commits.
+Write implementation plans that fix every decision and leave the typing to the implementer. Document what they need to build it without guessing: which files to touch in each phase, the contracts between parts, the behavior each step must produce, the test cases that prove it, the commands that check it, the docs worth reading. Decompose into 2–5 phases of bite-sized TDD steps. DRY. YAGNI. TDD. Frequent commits.
 
-Assume they are a skilled developer, but know almost nothing about our toolset or problem domain. Assume they don't know good test design very well.
+The implementer is a capable model that reads the repository itself and writes the code at implementation time. It has none of your research, so state what you found (exact paths, existing patterns to follow, the gotchas); it does not need the code written out for it. **The plan is not the code.** Implementation code in the plan doubles the work — it is written once here and again by the implementer — and makes the plan too long to review. Code belongs in the plan only where it *is* the decision (see "## Code in the plan").
 
 **Announce at start:** "I'm using the writing-plans skill to create the implementation plan."
 
@@ -48,7 +48,7 @@ Agent(subagent_type="general-purpose", model="opus", effort="xhigh", prompt=<ass
 **Pre-dispatch verification — run on the assembled prompt before dispatching:**
 
 1. `model="opus"`, `effort="xhigh"` (Mode B revisions: `effort="high"`), and no `ultrathink` in the prompt.
-2. Every bullet above is physically present in the prompt. In particular the FULL TEXT of these sections must be pasted in: Scope Check, File Structure, Bite-Sized Step Granularity, Plan Document Header, Required body sections, Phase Structure, Risk Tags, No Placeholders, Remember, Self-Review. Litmus test: if the prompt does not contain the fenced YAML frontmatter template, the `## Ф1:` example layout, and the `<!-- risk-tag checklist` block, you referenced instead of pasted — go back and paste.
+2. Every bullet above is physically present in the prompt. In particular the FULL TEXT of these sections must be pasted in: Scope Check, File Structure, Bite-Sized Step Granularity, Plan Document Header, Required body sections, Phase Structure, Risk Tags, Code in the plan, No Placeholders, Remember, Self-Review. Litmus test: if the prompt does not contain the fenced YAML frontmatter template, the `## Ф1:` example layout, and the `<!-- risk-tag checklist` block, you referenced instead of pasted — go back and paste.
 3. No unfilled `<placeholder>` tokens remain (scan the prompt for `<`).
 4. All paths absolute.
 
@@ -179,25 +179,17 @@ Each phase is an H2 (`## Ф1: <title>`) inside the `## Phases` section. Every ph
 - Consumes: [what this phase uses from earlier phases — exact signatures. If nothing, write literally `nothing`]
 - Produces: [what later phases rely on — exact function names, parameter and return types. If nothing, write literally `nothing`]
 
-- [ ] **Step 1: Write the failing test**
-
-```python
-def test_specific_behavior():
-    result = function(input)
-    assert result == expected
-```
+- [ ] **Step 1: Write the failing tests** in `tests/path/test.py`:
+  - `test_parses_empty_input` — `parse("")` returns `[]`;
+  - `test_rejects_unclosed_quote` — `parse('a "b')` raises `ParseError` whose message contains `unclosed quote at 2`;
+  - follow the fixture style of `tests/path/test_other.py` (`tmp_path`, no mocks of the filesystem).
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pytest tests/path/test.py::test_name -v`
-Expected: FAIL with "function not defined"
+Run: `pytest tests/path/test.py -v`
+Expected: FAIL — `parse` is not defined
 
-- [ ] **Step 3: Write minimal implementation**
-
-```python
-def function(input):
-    return expected
-```
+- [ ] **Step 3: Implement `parse(text: str) -> list[Token]`** in `src/path/file.py` per `## Contracts`. Reuse `Tokenizer` from `src/path/lexer.py:40` instead of a new scanner; the column in the error is 1-based.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -246,19 +238,36 @@ This mirrors `../dev-orchestrator/opus-plan-writer-prompt.md` Mode A "Risk tags"
 Steps that touch only documentation, or only test code working inside a temporary directory the test itself creates, do not match. Unsure whether a step matches → tag it: an extra tag only moves the phase to the slower sandboxed implementer; a missing tag runs a risky phase unsandboxed.
 <!-- /risk-tag checklist -->
 
+## Code in the plan
+
+The plan fixes decisions; the implementer writes the code. A step says **what** to build and **how to know it is right**, not the lines that build it.
+
+Write as code (short fenced blocks or inline) only what is itself the decision — the implementer could not guess it, and getting it different would be a bug:
+- signatures, data shapes, schemas, config keys, CLI flags, API request/response formats — normally once, in `## Contracts`;
+- exact strings the outside world sees or matches: error messages, log lines, file formats, regexes;
+- a tricky fragment where correctness hinges on exact form (an ordering, an escaping rule, a race-sensitive sequence) — at most ~15 lines, with one line on why it must be exactly this.
+
+Do NOT write:
+- function or method bodies, whole files, or the full text of a test;
+- boilerplate the implementer derives from the repo (imports, wiring, fixtures, registration);
+- the same code twice — once in `## Contracts`, and the steps reference it by name.
+
+Tests are specified as cases: test name, input or setup, expected outcome — enough that two implementers would write equivalent tests.
+
 ## No Placeholders
 
-Every step must contain the actual content an engineer needs. These are **plan failures** — never write them:
+Every step must contain the actual decisions an engineer needs. These are **plan failures** — never write them:
 - "TBD", "TODO", "implement later", "fill in details"
-- "Add appropriate error handling" / "add validation" / "handle edge cases"
-- "Write tests for the above" (without actual test code)
-- "Similar to Ф N" / "Same as earlier phase" (repeat the code — the implementer may dispatch phases out of order)
-- Steps that describe what to do without showing how (code blocks required for code steps)
-- References to types, functions, or methods not defined in any earlier phase
+- "Add appropriate error handling" / "add validation" / "handle edge cases" — name which errors, which validation, which cases, and what happens in each
+- "Write tests for the above" — without the list of cases (name, input, expected outcome)
+- "Similar to Ф N" / "Same as earlier phase" — restate the specifics (names, cases, paths); the implementer may dispatch phases out of order
+- References to types, functions, or methods not defined in any earlier phase or in `## Contracts`, and not present in the repository
+
+A step without a code block is not a placeholder. A step whose behavior, interface, or test cases are left vague is.
 
 ## Remember
 - Exact file paths always
-- Complete code in every step — if a step changes code, show the code
+- Decisions, not code — behavior, contracts, and test cases; code only where it is the decision (see "## Code in the plan")
 - Exact commands with expected output
 - DRY, YAGNI, TDD, frequent commits
 
@@ -268,7 +277,7 @@ The plan writer runs this self-review inline while writing the plan — include 
 
 **1. Spec coverage:** Skim each section/requirement in the spec. Can you point to a phase (and a step inside it) that implements it? List any gaps.
 
-**2. Placeholder scan:** Search your plan for red flags — any of the patterns from the "No Placeholders" section above. Fix them.
+**2. Placeholder and code scan:** Search your plan for red flags — any of the patterns from the "No Placeholders" section above. Fix them. Then scan for implementation code: a fenced block with a function body, a whole file or a full test → replace it with the behavior, the contract reference, or the list of test cases (see "## Code in the plan").
 
 **3. Type consistency:** Do the types, method signatures, and property names you used in later phases match what you defined in earlier phases? A function called `clearLayers()` in Ф1 but `clearFullLayers()` in Ф3 is a bug. Mechanical check: every `Consumes:` line in a phase's `**Interfaces:**` block MUST string-match a `Produces:` line of an earlier phase or a line in `## Contracts`. A `Consumes:` entry that matches neither is a plan bug — fix the name/signature mismatch; do not delete the line. Exception: lines reading literally `Consumes: nothing` / `Produces: nothing` are the explicit empty marker — exempt from this check, not a bug.
 

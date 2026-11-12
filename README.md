@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version 0.16.0" src="https://img.shields.io/badge/version-0.16.0-7c8cff?style=flat-square">
+  <img alt="Version 0.16.1" src="https://img.shields.io/badge/version-0.16.1-7c8cff?style=flat-square">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude_Code-plugin-d97757?style=flat-square">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-35d6a6?style=flat-square">
 </p>
